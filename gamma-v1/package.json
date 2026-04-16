@@ -1,0 +1,14 @@
+{
+  "name": "gamma-v1",
+  "version": "1.0.0",
+  "description": "MyClaw v1 multi-executor router: local_gamma4 (LM Studio) + local_claude_code",
+  "main": "index.js",
+  "bin": {
+    "myclaw": "./bin/myclaw.js"
+  },
+  "scripts": {
+    "health": "node bin/myclaw.js --health",
+    "log":    "node bin/myclaw.js --log"
+  },
+  "engines": { "node": ">=18" }
+}
