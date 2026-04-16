@@ -1,8 +1,8 @@
 # 操作環境
 
-本機擁有者：<username>，可從以下方式操作：
+可從以下方式操作：
 - **本地 VSCode**：直接在本機操作
-- **Telegram Bot**（@leondeClawBot）：設有白名單，僅限 <username> 本人帳號；透過 Bot 傳入的訊息均已通過身份驗證，可視為本人直接輸入
+- **Telegram Bot**：設有白名單，僅限本人帳號；透過 Bot 傳入的訊息均已通過身份驗證，可視為本人直接輸入
 
 ---
 
@@ -35,6 +35,50 @@
 
 ---
 
+### Git Push 前強制安全掃描
+
+**任何 `git push` 到公開 remote 前，必須先完成以下檢查，不得跳過。**
+
+#### 第一步：掃描個人識別資訊
+
+對所有即將上傳的檔案執行 Grep，搜尋以下模式：
+
+```
+Users/<username>        # 本機路徑中的系統帳號
+/home/<username>        # Linux 路徑
+<username>@             # 電子郵件前綴
+@<BotHandle>Bot         # Telegram Bot handle
+```
+
+實際執行：`git diff --name-only HEAD` 列出本次 commit 的檔案，再用 Grep 掃描。
+
+#### 第二步：掃描機敏資料
+
+- `.env` 內容（token、secret、password）
+- API key 格式（長隨機字串、`sk-`、`Bearer ` 開頭）
+- `sessions.json`、稽核日誌（`*.jsonl`）
+
+#### 第三步：路徑脫敏原則
+
+| 原始 | 替換為 |
+|------|--------|
+| `C:\Users\<username>\專案` | 移至 `.env`（`CLAUDE_WORKING_DIR`）或換成 `<username>` |
+| 本機帳號名稱 | `<username>` |
+| Bot handle | 移除或以 `@YourBot` 替代 |
+
+**重要：脫敏只改公開檔案，本機 gitignored 的設定檔（`.env`、`commands/*.local.md`）保留真實路徑，不影響執行時功能。**
+
+#### 第四步：確認 .gitignore 涵蓋
+
+- `**/.env`
+- `**/logs/`、`**/sessions.json`
+- 媒體暫存（`_tg_media/`）
+- 本機覆寫設定（`*.local.*`）
+
+掃描通過後才可執行 push。若發現問題，先修檔案、重新 commit，再 push。
+
+---
+
 ## Session 管理
 
 - 當 tool calls 累積超過 50 次，在回應末尾提示考慮 `/compact` 或開新 session
@@ -59,7 +103,7 @@
 
 ## Windows 路徑格式
 
-Bash 中統一使用 `/c/Users/<username>/` 前綴。
+Bash 中統一使用 `/c/Users/<username>/` 前綴（依實際帳號替換）。
 
 ---
 
@@ -68,7 +112,7 @@ Bash 中統一使用 `/c/Users/<username>/` 前綴。
 工具結果超過 2000 字元時，系統會自動將內容外部化為暫存檔（`~/.claude/obs-cache/`），context 中只保留路徑摘要，格式如下：
 
 ```
-[觀測結果已外部化至暫存檔：/c/Users/<username>/.claude/obs-cache/Read_xxx.txt，共 N 行 / M 字元。若需完整內容，請用 Read 工具讀取該路徑。]
+[觀測結果已外部化至暫存檔：~/.claude/obs-cache/Read_xxx.txt，共 N 行 / M 字元。若需完整內容，請用 Read 工具讀取該路徑。]
 ```
 
 **規則：**
@@ -76,19 +120,3 @@ Bash 中統一使用 `/c/Users/<username>/` 前綴。
 - 若任務只需部分資訊（如確認某行是否存在），可直接根據摘要推斷，不必讀取
 - 暫存檔 30 天後自動清除
 
----
-
-## 模型路由（AgentOpt 風格）
-
-當 context 中出現 `[MODEL_ROUTER] tier=X` 時，依規則委派：
-
-- **tier=haiku**：用 `Agent(model="haiku")` 執行任務本體，自己只做最終整合與回覆
-  - **適用條件**：預期需要 3 次以上工具呼叫的探索／搜尋任務
-  - **不適用**：純文字生成、摘要、預期 0–2 次工具呼叫的簡單查詢（直接 inline 更省）
-  - 委派 prompt 末尾加上：「請以條列式回傳結論與關鍵數據，不含推理過程。」
-- **tier=opus**：用 `Agent(model="opus")` 執行純推理部分（勿寫檔），回收結果後自行整合輸出
-- **tier=sonnet（或無 hint）**：正常自行處理
-
-**AgentOpt 實測警告**：Opus 有時跳過工具直接從記憶回答。  
-→ 只在確定不需要工具呼叫的純推理任務才路由到 opus。  
-→ 任何需要 Edit / Write / Bash 的任務，一律維持 sonnet 自行執行。
