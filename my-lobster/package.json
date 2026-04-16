@@ -1,0 +1,11 @@
+{
+  "name": "myclaw-telegram-bot",
+  "version": "1.0.0",
+  "main": "bot.js",
+  "dependencies": {
+    "dotenv": "^16.0.0",
+    "node-telegram-bot-api": "^0.66.0",
+    "otplib": "^13.3.0",
+    "qrcode": "^1.5.4"
+  }
+}
