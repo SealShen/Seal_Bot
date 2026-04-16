@@ -25,9 +25,14 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() not in ('utf-8', 'utf8'):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
 # ── 請依個人環境修改 ────────────────────────────────────────────
+# 目錄命名規則（Claude Code 自動產生）：
+#   路徑分隔符替換為 -，例如：
+#   Windows: C:\Users\you\MyProject → c--Users-you-MyProject
+#   Linux/Mac: /home/you/myproject  → home-you-myproject
 PROJECT_DIRS = [
-    os.path.expanduser('~/.claude/projects/YOUR_PROJECT_DIR_1'),
-    os.path.expanduser('~/.claude/projects/YOUR_PROJECT_DIR_2'),
+    os.path.expanduser('~/.claude/projects/YOUR_PROJECT_DIR_1'),   # e.g. c--Users-you-ProjectA
+    os.path.expanduser('~/.claude/projects/YOUR_PROJECT_DIR_2'),   # e.g. c--Users-you-ProjectB
+    os.path.expanduser('~/.claude/projects/YOUR_PROJECT_DIR_3'),   # e.g. c--Users-you-agent-global-configs
 ]
 # ──────────────────────────────────────────────────────────────
 
