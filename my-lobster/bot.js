@@ -50,6 +50,8 @@ let currentProc     = null;
 let newSession      = false;
 let workingDir      = DEFAULT_DIR;
 let currentSessionId = null; // null = --continue, string = --resume <id>
+let autoMode        = false; // --dangerously-skip-permissions toggle
+let claudeModel     = null;  // null = 預設, 'haiku'|'sonnet'|'opus' = --model 指定
 
 const SESSIONS_FILE = path.join(__dirname, 'sessions.json');
 let recentSessions = (() => {
@@ -195,7 +197,9 @@ async function runClaude(prompt, chatId, forceNew = false, imagePaths = []) {
   let lineBuf          = '';
   let capturedSession  = null;
 
-  const args = ['--print', '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
+  const args = ['--print', '--output-format', 'stream-json', '--verbose'];
+  if (autoMode) args.push('--dangerously-skip-permissions');
+  if (claudeModel) args.push('--model', claudeModel);
   if (!useNewSession) {
     if (currentSessionId) args.push('--resume', currentSessionId);
     else args.push('--continue');
@@ -306,6 +310,7 @@ const MAIN_KEYBOARD = {
     ['📂 MyClaw', '📂 Netivism'],
     ['📑 Sessions', '🔄 重啟'],
     ['🛑 取消執行', '📋 目前狀態'],
+    ['⚠️Auto Mode', '✨Model'],
   ],
   resize_keyboard: true,
   persistent: true,
@@ -354,7 +359,7 @@ function loadAllSessions(labelFilter = null) {
     const dirs = fs.readdirSync(PROJECTS_ROOT, { withFileTypes: true })
       .filter(d => d.isDirectory());
     for (const dir of dirs) {
-      const label = dir.name in DIR_LABEL ? DIR_LABEL[dir.name] : dir.name;
+      const label = dir.name.toLowerCase() in DIR_LABEL ? DIR_LABEL[dir.name.toLowerCase()] : dir.name;
       if (label === null) continue; // 隱藏
       if (labelFilter && label !== labelFilter) continue; // 只顯示當前目錄
       const dirPath = path.join(PROJECTS_ROOT, dir.name);
@@ -562,6 +567,50 @@ bot.on('callback_query', async (query) => {
   const chatId  = query.message.chat.id;
   const msgId   = query.message.message_id;
   bot.answerCallbackQuery(query.id);
+
+  // ✨Model 選擇
+  if (data.startsWith('model:')) {
+    const choice = data.slice(6); // 'gamma' | 'haiku' | 'sonnet' | 'opus'
+    if (choice === 'gamma') {
+      if (!gammaExecute) {
+        bot.editMessageText('❌ gamma-v1 未安裝。', { chat_id: chatId, message_id: msgId });
+        return;
+      }
+      gammaMode = !gammaMode;
+      gammaHistory = [];
+      claudeModel = null;
+      bot.editMessageText(
+        gammaMode
+          ? '🤖 *Gamma 模式開啟*\n普通訊息直接傳給 gamma（本機 gemma）'
+          : '💻 *Gamma 模式關閉*\n普通訊息回到 Claude Code',
+        { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' }
+      );
+    } else {
+      gammaMode = false;
+      gammaHistory = [];
+      claudeModel = choice === 'sonnet' ? null : choice;
+      const label = choice === 'haiku' ? '⚡ Haiku' : choice === 'sonnet' ? '🎵 Sonnet（預設）' : '🏛 Opus';
+      bot.editMessageText(
+        `✅ 模型已切換至 *${label}*`,
+        { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' }
+      );
+    }
+    return;
+  }
+
+  // Auto Mode 確認
+  if (data === 'automode:cancel') {
+    bot.editMessageText('❌ 已取消，Auto Mode 維持關閉。', { chat_id: chatId, message_id: msgId });
+    return;
+  }
+  if (data === 'automode:confirm') {
+    autoMode = true;
+    bot.editMessageText(
+      '⚠️ *Auto Mode 已啟用*\n\nClaude 將跳過所有工具確認視窗。\n再按一次 *⚠️Auto Mode* 可隨時關閉。',
+      { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' }
+    );
+    return;
+  }
 
   // 安全確認
   if (data === 'sec:cancel') {
@@ -940,10 +989,47 @@ bot.on('message', async (msg) => {
         ? `指定 \`${currentSessionId.slice(0, 8)}…\``
         : (newSession ? '新' : '繼續上次');
       const gammaSuffix = gammaMode ? `\n*模式：* 🤖 Gamma（${gammaHistory.length / 2 | 0} 輪歷史）` : '';
+      const autoSuffix = autoMode ? '\n*Auto Mode：* ⚠️ 開啟（跳過工具確認）' : '';
       bot.sendMessage(msg.chat.id,
-        `*狀態：* ${status}\n*目錄：* \`${workingDir}\`\n*Session：* ${sessLabel}${gammaSuffix}`,
+        `*狀態：* ${status}\n*目錄：* \`${workingDir}\`\n*Session：* ${sessLabel}${gammaSuffix}${autoSuffix}`,
         { parse_mode: 'Markdown', reply_markup: MAIN_KEYBOARD }
       );
+      return;
+    }
+    if (text === '⚠️Auto Mode') {
+      if (autoMode) {
+        autoMode = false;
+        bot.sendMessage(msg.chat.id, '✅ Auto Mode 已關閉，Claude 將在需要時請求確認。', { reply_markup: MAIN_KEYBOARD });
+      } else {
+        bot.sendMessage(msg.chat.id,
+          '⚠️ *確認啟用 Auto Mode？*\n\n啟用後 Claude 將使用 `--dangerously-skip-permissions`，跳過所有工具確認視窗。\n\n請確認你了解風險後再啟用。',
+          {
+            parse_mode: 'Markdown',
+            reply_markup: {
+              inline_keyboard: [[
+                { text: '⚠️ 確認啟用', callback_data: 'automode:confirm' },
+                { text: '❌ 取消',     callback_data: 'automode:cancel'  },
+              ]],
+            },
+          }
+        );
+      }
+      return;
+    }
+
+    if (text === '✨Model') {
+      const current = gammaMode ? 'gamma' : (claudeModel || 'sonnet');
+      bot.sendMessage(msg.chat.id, `✨ *Model 選擇*\n目前：\`${current}\`\n\n選擇要切換的模型：`, {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: `${current === 'gamma'  ? '✅ ' : ''}🤖 Gamma（本機）`,  callback_data: 'model:gamma'  }],
+            [{ text: `${current === 'haiku'  ? '✅ ' : ''}⚡ Haiku`,          callback_data: 'model:haiku'  }],
+            [{ text: `${current === 'sonnet' ? '✅ ' : ''}🎵 Sonnet（預設）`, callback_data: 'model:sonnet' }],
+            [{ text: `${current === 'opus'   ? '✅ ' : ''}🏛 Opus`,           callback_data: 'model:opus'   }],
+          ],
+        },
+      });
       return;
     }
 

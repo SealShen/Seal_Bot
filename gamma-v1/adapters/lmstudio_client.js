@@ -22,15 +22,19 @@ function httpRequest(baseUrl, pathname, body, timeoutMs) {
     const basePath = base.pathname.replace(/\/$/, '');
     const fullPath = basePath + (pathname.startsWith('/') ? pathname : '/' + pathname);
 
+    const headers = {
+      'Content-Type':   'application/json',
+      'Content-Length': Buffer.byteLength(data),
+    };
+    const apiKey = process.env.LMSTUDIO_API_KEY;
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
     const req = lib.request({
       hostname: base.hostname,
       port:     base.port || (base.protocol === 'https:' ? 443 : 80),
       path:     fullPath,
       method:   'POST',
-      headers: {
-        'Content-Type':   'application/json',
-        'Content-Length': Buffer.byteLength(data),
-      },
+      headers,
     }, (res) => {
       let raw = '';
       res.on('data', d => { raw += d; });
@@ -70,7 +74,9 @@ async function healthCheck(baseUrl) {
     try {
       const url = new URL('/v1/models', _base);
       const lib = url.protocol === 'https:' ? https : http;
-      const req = lib.get(url.toString(), (res) => {
+      const _apiKey = process.env.LMSTUDIO_API_KEY;
+      const reqOpts = { headers: _apiKey ? { 'Authorization': `Bearer ${_apiKey}` } : {} };
+      const req = lib.get(url.toString(), reqOpts, (res) => {
         resolve(res.statusCode < 400);
         res.resume();
       });
