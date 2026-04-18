@@ -11,6 +11,7 @@
 
 # Gamma 稽核日誌（大量機器產生，不需上傳）
 **/logs/
+gamma-v1/gemma_usage.log
 
 # SealCast 草稿（AI 產生內容，含本機路徑）
 SealCast/drafts/
