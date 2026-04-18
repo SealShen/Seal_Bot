@@ -25,8 +25,23 @@ const ALLOWED_DIRS  = [
   TG_MEDIA_DIR,
 ];
 
+// DIR_LABELS 對應 _extraDirs（額外目錄）的顯示標籤，DEFAULT_DIR 固定取 basename
+// .env 範例：ALLOWED_DIRS=C:\proj1;C:\proj2   DIR_LABELS=Proj1;Proj2
+const _dirLabels = (process.env.DIR_LABELS || '').split(';').map(s => s.trim());
+// 選單按鈕（排除 _tg_media）：{ label, dir }
+const DIR_BUTTONS = ALLOWED_DIRS
+  .filter(d => d !== TG_MEDIA_DIR)
+  .map((d) => {
+    const extraIdx = _extraDirs.indexOf(d);
+    const name = extraIdx >= 0
+      ? (_dirLabels[extraIdx] || path.basename(d))  // extra dir → 對應 DIR_LABELS
+      : path.basename(d);                             // DEFAULT_DIR → 直接取 basename
+    return { label: '📂 ' + name, dir: d };
+  });
+
 const STREAM_INTERVAL = 3000;
 const MAX_LEN         = 3800;
+const MEDIA_TTL_MS    = 24 * 60 * 60 * 1000; // _tg_media 檔案保留 24 小時
 const ENV_PATH        = path.join(__dirname, '.env');
 
 if (!TOKEN)           throw new Error('TELEGRAM_TOKEN not set in .env');
@@ -52,6 +67,7 @@ let workingDir      = DEFAULT_DIR;
 let currentSessionId = null; // null = --continue, string = --resume <id>
 let autoMode        = false; // --dangerously-skip-permissions toggle
 let claudeModel     = null;  // null = 預設, 'haiku'|'sonnet'|'opus' = --model 指定
+let pendingGemmaContext = null; // 從 gemma 切回 Claude 時，保存 gemma 最後一句回覆，下次送 Claude 時前置一次
 
 const SESSIONS_FILE = path.join(__dirname, 'sessions.json');
 let recentSessions = (() => {
@@ -180,7 +196,8 @@ function parseStreamLine(line) {
     return out.join('\n') || null;
   }
 
-  if (t === 'result') return String(ev.result ?? '') || null;
+  // 'result' 事件的 ev.result 是最後 assistant 文字的副本，忽略以避免重複輸出
+  if (t === 'result') return null;
 
   return null;
 }
@@ -196,6 +213,18 @@ async function runClaude(prompt, chatId, forceNew = false, imagePaths = []) {
   let lastSent         = '';
   let lineBuf          = '';
   let capturedSession  = null;
+  // stream-json --verbose 會對同一個 assistant message 發多次事件（partial + final，內容都是完整文字）
+  // 用 msg.id 去重：同 id 後到者覆蓋原本那段，不累加
+  const blocks = []; // { id: string|null, text: string }
+  const rebuildOutput = () => { output = blocks.map(b => b.text).filter(Boolean).join('\n') + (blocks.length ? '\n' : ''); };
+  const appendBlock = (id, text) => {
+    if (id) {
+      const existing = blocks.find(b => b.id === id);
+      if (existing) { existing.text = text; rebuildOutput(); return; }
+    }
+    blocks.push({ id: id || null, text });
+    output += text + '\n';
+  };
 
   const args = ['--print', '--output-format', 'stream-json', '--verbose'];
   if (autoMode) args.push('--dangerously-skip-permissions');
@@ -219,7 +248,13 @@ async function runClaude(prompt, chatId, forceNew = false, imagePaths = []) {
     ? '\n\n以下是圖片路徑，請用 Read 工具讀取後回答：\n' + imagePaths.map(p => `- ${p}`).join('\n')
     : '';
   const langPrefix = useNewSession ? '請用繁體中文回答。\n\n' : '';
-  proc.stdin.write(langPrefix + prompt + imageSection, 'utf8');
+  // 若剛從 gemma 切回，前置 gemma 最後一句輸出（一次性，用完清空）
+  const gemmaCtx = pendingGemmaContext;
+  pendingGemmaContext = null;
+  const gemmaSection = gemmaCtx
+    ? `[以下是使用者剛才在 Gemma（本機小模型）那邊得到的最後一段輸出，僅供參考脈絡，請根據使用者接下來的訊息回應]\n${gemmaCtx}\n\n---\n\n`
+    : '';
+  proc.stdin.write(langPrefix + gemmaSection + prompt + imageSection, 'utf8');
   proc.stdin.end();
 
   currentProc = proc;
@@ -230,13 +265,17 @@ async function runClaude(prompt, chatId, forceNew = false, imagePaths = []) {
     lineBuf = lines.pop(); // 保留尚未結束的最後一行
     for (const line of lines) {
       if (!line.trim()) continue;
-      try { const ev = JSON.parse(line); if (ev.session_id) capturedSession = ev.session_id; } catch {}
+      let ev = null;
+      try { ev = JSON.parse(line); } catch {}
+      if (ev?.session_id) capturedSession = ev.session_id;
       const display = parseStreamLine(line);
-      if (display) output += display + '\n';
+      if (!display) continue;
+      const id = ev?.type === 'assistant' ? ev.message?.id : null;
+      appendBlock(id, display);
     }
   });
 
-  proc.stderr.on('data', (d) => { output += d.toString(); });
+  proc.stderr.on('data', (d) => { appendBlock(null, d.toString()); });
 
   const startTime = Date.now();
   const timer = setInterval(async () => {
@@ -263,8 +302,14 @@ async function runClaude(prompt, chatId, forceNew = false, imagePaths = []) {
     currentProc = null;
     // 處理 lineBuf 中剩餘的最後一行
     if (lineBuf.trim()) {
+      let ev = null;
+      try { ev = JSON.parse(lineBuf); } catch {}
+      if (ev?.session_id) capturedSession = ev.session_id;
       const display = parseStreamLine(lineBuf);
-      if (display) output += display + '\n';
+      if (display) {
+        const id = ev?.type === 'assistant' ? ev.message?.id : null;
+        appendBlock(id, display);
+      }
     }
 
     // 記錄 session（零 token 消耗，純 Node.js）
@@ -305,9 +350,14 @@ function downloadFile(url, dest) {
 }
 
 // ── Keyboard ──────────────────────────────────────────────────────────────────
+// 目錄按鈕每列最多兩顆
+const _dirRows = [];
+for (let i = 0; i < DIR_BUTTONS.length; i += 2) {
+  _dirRows.push(DIR_BUTTONS.slice(i, i + 2).map(b => b.label));
+}
 const MAIN_KEYBOARD = {
   keyboard: [
-    ['📂 MyClaw', '📂 Netivism'],
+    ..._dirRows,
     ['📑 Sessions', '🔄 重啟'],
     ['🛑 取消執行', '📋 目前狀態'],
     ['⚠️Auto Mode', '✨Model'],
@@ -327,7 +377,7 @@ function requireAuth(chatId) {
 }
 
 // ── Session browser ───────────────────────────────────────────────────────────
-const SESSIONS_PER_PAGE = 7;
+const SESSIONS_PER_PAGE = 8;
 const PROJECTS_ROOT = path.join(os.homedir(), '.claude', 'projects');
 
 // 目錄路徑 → slug（與 Claude Code session 目錄命名規則相同）
@@ -335,15 +385,15 @@ function pathToSlug(p) {
   return p.replace(/^([A-Za-z]):[\/\\]/, '$1--').replace(/[\/\\]/g, '-');
 }
 
-// 動態建立 DIR_LABEL：ALLOWED_DIRS[0] 顯示為最後一段目錄名，其餘類推
-// 可在 .env 用 DIR_LABELS=label1;label2 覆寫（順序對應 ALLOWED_DIRS）
-const _dirLabels = (process.env.DIR_LABELS || '').split(';').map(s => s.trim());
-const DIR_LABEL  = {};
-ALLOWED_DIRS.forEach((d, i) => {
-  if (d === TG_MEDIA_DIR) return; // 不加入 session label
-  const slug  = pathToSlug(d);
-  const label = _dirLabels[i] || path.basename(d);
-  DIR_LABEL[slug.toLowerCase()] = label;
+// DIR_LABEL：slug → 顯示名稱（與 DIR_BUTTONS 邏輯相同）
+const DIR_LABEL = {};
+ALLOWED_DIRS.forEach((d) => {
+  if (d === TG_MEDIA_DIR) return;
+  const extraIdx = _extraDirs.indexOf(d);
+  const name = extraIdx >= 0
+    ? (_dirLabels[extraIdx] || path.basename(d))
+    : path.basename(d);
+  DIR_LABEL[pathToSlug(d).toLowerCase()] = name;
 });
 
 // 將 workingDir 轉換為對應的顯示標籤
@@ -359,7 +409,8 @@ function loadAllSessions(labelFilter = null) {
     const dirs = fs.readdirSync(PROJECTS_ROOT, { withFileTypes: true })
       .filter(d => d.isDirectory());
     for (const dir of dirs) {
-      const label = dir.name.toLowerCase() in DIR_LABEL ? DIR_LABEL[dir.name.toLowerCase()] : dir.name;
+      if (!(dir.name.toLowerCase() in DIR_LABEL)) continue; // 只顯示 ALLOWED_DIRS 內的專案
+      const label = DIR_LABEL[dir.name.toLowerCase()];
       if (label === null) continue; // 隱藏
       if (labelFilter && label !== labelFilter) continue; // 只顯示當前目錄
       const dirPath = path.join(PROJECTS_ROOT, dir.name);
@@ -376,49 +427,102 @@ function loadAllSessions(labelFilter = null) {
           mtime = stat.mtimeMs;
           const fileSize = stat.size;
           if (fileSize < 500) continue; // 跳過空 session
-          // 讀開頭 8KB + 結尾 4KB，與 VSCode 相同的原始字串搜尋策略
+          // 對齊 VSCode extension：64KB head + 64KB tail（若檔案 < 64KB，tail = head）
+          const CHUNK = 65536;
           const fd   = fs.openSync(filePath, 'r');
-          const buf  = Buffer.alloc(8192);
-          const n    = fs.readSync(fd, buf, 0, 8192, 0);
-          const buf2 = Buffer.alloc(4096);
-          const tail2Start = Math.max(0, fileSize - 4096);
-          const n2   = fs.readSync(fd, buf2, 0, 4096, tail2Start);
-          fs.closeSync(fd);
+          const buf  = Buffer.alloc(CHUNK);
+          const n    = fs.readSync(fd, buf, 0, CHUNK, 0);
           const head = buf.slice(0, n).toString('utf8');
-          const tail = buf2.slice(0, n2).toString('utf8');
-          // 原始字串搜尋，與 VSCode extension 邏輯相同（抵抗截斷行）
+          let tail   = head;
+          const tailStart = Math.max(0, fileSize - CHUNK);
+          if (tailStart > 0) {
+            const buf2 = Buffer.alloc(CHUNK);
+            const n2   = fs.readSync(fd, buf2, 0, CHUNK, tailStart);
+            tail = buf2.slice(0, n2).toString('utf8');
+          }
+          fs.closeSync(fd);
+          // 原始字串搜尋，對齊 VSCode：找最後一個 match、接受 "k":"v" 與 "k": "v" 兩種格式、用 JSON.parse 正確 unescape
           const extractField = (chunk, field) => {
-            const prefix = `"${field}":"`;
-            let i = chunk.indexOf(prefix);
-            if (i < 0) return null;
-            i += prefix.length;
-            let out = '';
-            while (i < chunk.length) {
-              if (chunk[i] === '\\') { i += 2; continue; }
-              if (chunk[i] === '"') break;
-              out += chunk[i++];
+            const prefixes = [`"${field}":"`, `"${field}": "`];
+            let best = null;
+            let bestPos = -1;
+            for (const prefix of prefixes) {
+              let start = 0;
+              while (true) {
+                const p = chunk.indexOf(prefix, start);
+                if (p < 0) break;
+                const valStart = p + prefix.length;
+                let i = valStart;
+                while (i < chunk.length) {
+                  if (chunk[i] === '\\') { i += 2; continue; }
+                  if (chunk[i] === '"') break;
+                  i++;
+                }
+                if (p > bestPos) {
+                  let raw = chunk.slice(valStart, i);
+                  try { raw = JSON.parse(`"${raw}"`); } catch {}
+                  best = raw;
+                  bestPos = p;
+                }
+                start = i + 1;
+              }
             }
-            return out.trim() || null;
+            if (!best) return null;
+            const trimmed = String(best).trim();
+            return trimmed || null;
           };
-          // 優先順序與 VSCode 完全一致：customTitle > aiTitle > lastPrompt > summary > enqueue
+          // 優先順序對齊 VSCode extension（tail 優先、lastPrompt/summary 只查 tail）
           firstPrompt = (
-            extractField(head, 'customTitle') ||
             extractField(tail, 'customTitle') ||
-            extractField(head, 'aiTitle')     ||
+            extractField(head, 'customTitle') ||
             extractField(tail, 'aiTitle')     ||
+            extractField(head, 'aiTitle')     ||
             extractField(tail, 'lastPrompt')  ||
-            extractField(head, 'lastPrompt')  ||
-            extractField(head, 'summary')     ||
             extractField(tail, 'summary')
           );
-          if (firstPrompt) firstPrompt = firstPrompt.replace(/\\n/g, ' ').replace(/\s+/g, ' ').slice(0, 50);
+          if (firstPrompt) firstPrompt = firstPrompt.replace(/\s+/g, ' ').slice(0, 50);
         } catch { continue; }
-        sessions.push({ id: sessionId, firstPrompt: firstPrompt || '(無內容)', mtime, project: label });
+        if (!firstPrompt) continue; // 對齊 VSCode：隱藏無標題的 session
+        sessions.push({ id: sessionId, firstPrompt, mtime, project: label });
       }
     }
   } catch {}
   sessions.sort((a, b) => b.mtime - a.mtime);
   return sessions;
+}
+
+// 抓某個 session 最後一則 assistant 文字回覆（反向掃 jsonl，跳過純 tool_use 事件）
+function getLastAssistantText(sessionId) {
+  let filePath = null;
+  try {
+    const dirs = fs.readdirSync(PROJECTS_ROOT, { withFileTypes: true });
+    for (const d of dirs) {
+      if (!d.isDirectory()) continue;
+      const candidate = path.join(PROJECTS_ROOT, d.name, sessionId + '.jsonl');
+      if (fs.existsSync(candidate)) { filePath = candidate; break; }
+    }
+  } catch { return null; }
+  if (!filePath) return null;
+
+  try {
+    const lines = fs.readFileSync(filePath, 'utf8').split('\n');
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      let ev;
+      try { ev = JSON.parse(line); } catch { continue; }
+      if (ev.type !== 'assistant') continue;
+      const parts = ev.message?.content;
+      let text = '';
+      if (Array.isArray(parts)) {
+        text = parts.filter(p => p.type === 'text' && p.text).map(p => p.text).join('\n').trim();
+      } else if (typeof parts === 'string') {
+        text = parts.trim();
+      }
+      if (text) return text;
+    }
+  } catch {}
+  return null;
 }
 
 function buildSessionsKeyboard(sessions, page = 0) {
@@ -570,28 +674,54 @@ bot.on('callback_query', async (query) => {
 
   // ✨Model 選擇
   if (data.startsWith('model:')) {
-    const choice = data.slice(6); // 'gamma' | 'haiku' | 'sonnet' | 'opus'
-    if (choice === 'gamma') {
-      if (!gammaExecute) {
-        bot.editMessageText('❌ gamma-v1 未安裝。', { chat_id: chatId, message_id: msgId });
+    const choice = data.slice(6); // 'gemma' | 'haiku' | 'sonnet' | 'opus'
+    if (choice === 'gemma') {
+      if (!gemmaExecute) {
+        bot.editMessageText('❌ gemma-v1 未安裝。', { chat_id: chatId, message_id: msgId });
         return;
       }
-      gammaMode = !gammaMode;
-      gammaHistory = [];
+      gemmaMode = !gemmaMode;
       claudeModel = null;
+
+      let inheritNote = '';
+      if (gemmaMode) {
+        // 開啟時：繼承當前 Claude session 歷史（切回 Claude 時不會反向注入）
+        const r = inheritClaudeSessionToGemma();
+        if (r.ok) inheritNote = `\n\n📥 已繼承 Claude session 歷史（${r.turns} 則訊息）`;
+        else { gemmaHistory = []; inheritNote = `\n\n_（無可繼承的歷史：${r.reason}）_`; }
+      } else {
+        // 關閉時：抓 gemma 最後一句 assistant 回覆，排入下一則 Claude prompt 的前置
+        const lastAssistant = [...gemmaHistory].reverse().find(m => m.role === 'assistant');
+        if (lastAssistant?.content) {
+          pendingGemmaContext = lastAssistant.content;
+          inheritNote = '\n\n📎 下一則訊息將自動附帶 Gemma 最後一句輸出給 Claude';
+        }
+        gemmaHistory = []; // 關閉時清空，不回寫 Claude session
+      }
+
       bot.editMessageText(
-        gammaMode
-          ? '🤖 *Gamma 模式開啟*\n普通訊息直接傳給 gamma（本機 gemma）'
-          : '💻 *Gamma 模式關閉*\n普通訊息回到 Claude Code',
+        (gemmaMode
+          ? '🤖 *Gemma 模式開啟*\n普通訊息直接傳給 Gemma（本機）'
+          : '💻 *Gemma 模式關閉*\n普通訊息回到 Claude Code') + inheritNote,
         { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' }
       );
     } else {
-      gammaMode = false;
-      gammaHistory = [];
-      claudeModel = choice === 'sonnet' ? null : choice;
+      // 從 gemma 切 Claude model 時，抓最後一句 gemma 回覆排入下一則 Claude prompt
+      let ctxNote = '';
+      if (gemmaMode) {
+        const lastAssistant = [...gemmaHistory].reverse().find(m => m.role === 'assistant');
+        if (lastAssistant?.content) {
+          pendingGemmaContext = lastAssistant.content;
+          ctxNote = '\n\n📎 下一則訊息將自動附帶 Gemma 最後一句輸出給 Claude';
+        }
+      }
+      gemmaMode = false;
+      gemmaHistory = [];
+      const modelMap = { haiku: 'haiku', sonnet: 'claude-sonnet-4-6', opus: 'claude-opus-4-7' };
+      claudeModel = modelMap[choice] ?? choice;
       const label = choice === 'haiku' ? '⚡ Haiku' : choice === 'sonnet' ? '🎵 Sonnet（預設）' : '🏛 Opus';
       bot.editMessageText(
-        `✅ 模型已切換至 *${label}*`,
+        `✅ 模型已切換至 *${label}*${ctxNote}`,
         { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' }
       );
     }
@@ -705,10 +835,21 @@ bot.on('callback_query', async (query) => {
     newSession = false;
     const sessions = loadAllSessions();
     const sess = sessions.find(s => s.id === id);
-    bot.editMessageText(
-      `▶ 已切換至 Session：\n${sess?.firstPrompt || id.slice(0, 8) + '…'}`,
-      { chat_id: chatId, message_id: msgId }
+    const currentModel = gemmaMode ? 'gemma' : (claudeModel || 'sonnet');
+    await bot.editMessageText(
+      `▶ 已切換至 Session：\n${sess?.firstPrompt || id.slice(0, 8) + '…'}\n\n✨ 目前 Model：\`${currentModel}\``,
+      { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' }
     ).catch(() => {});
+
+    // 顯示該 session 最後一則 assistant 回覆，幫助使用者確認前文
+    const lastReply = getLastAssistantText(id);
+    if (lastReply) {
+      const TAIL = 3000;
+      const preview = lastReply.length > TAIL ? '…' + lastReply.slice(-TAIL) : lastReply;
+      await bot.sendMessage(chatId, `💭 最後回覆：\n${preview}`).catch(() => {});
+    } else {
+      await bot.sendMessage(chatId, '_（此 session 無可預覽的回覆）_', { parse_mode: 'Markdown' }).catch(() => {});
+    }
     return;
   }
 
@@ -726,59 +867,108 @@ bot.on('callback_query', async (query) => {
   }
 });
 
-// ── gamma-v1 integration ──────────────────────────────────────────────────────
-// 載入 gamma-v1 router（若目錄不存在則靜默跳過，不影響現有流程）
-let gammaExecute = null;
+// ── gemma integration ────────────────────────────────────────────────────────
+// 載入 gemma router（模組目錄名稱 gamma-v1 保留為歷史命名；若不存在則靜默跳過）
+let gemmaExecute = null;
 try {
-  gammaExecute = require('../gamma-v1/index').execute;
+  gemmaExecute = require('../gamma-v1/index').execute;
 } catch {}
 
-// gamma 模式：開啟後，普通訊息走 gamma 而非 Claude Code
-let gammaMode = false;
-// gamma 對話歷史（in-memory，重啟清空）
-let gammaHistory = [];   // [{ role: 'user'|'assistant', content: string }]
-const GAMMA_HISTORY_TURNS = 6; // 保留最近 N 輪（user+assistant 各算一）
+// gemma 模式：開啟後，普通訊息走 gemma 而非 Claude Code
+let gemmaMode = false;
+// gemma 對話歷史（in-memory，重啟清空）
+let gemmaHistory = [];   // [{ role: 'user'|'assistant', content: string }]
+const GEMMA_HISTORY_TURNS = 6; // 保留最近 N 輪（user+assistant 各算一）
 
-// /gmode — 切換 gamma 模式
+// 從 Claude session jsonl 讀取歷史，注入到 gemmaHistory（切換到 gemma 時呼叫）
+// 繼承後 gemma 會看到 Claude 的對話脈絡，但 gemma 產生的內容不會回寫到 Claude session
+function inheritClaudeSessionToGemma() {
+  if (!currentSessionId) return { ok: false, reason: '目前沒有進行中的 Claude session' };
+  const slug = pathToSlug(workingDir).toLowerCase();
+  let actualDir = null;
+  try {
+    const dirs = fs.readdirSync(PROJECTS_ROOT);
+    actualDir = dirs.find(d => d.toLowerCase() === slug);
+  } catch { return { ok: false, reason: '無法讀取 projects 目錄' }; }
+  if (!actualDir) return { ok: false, reason: '找不到對應的專案目錄' };
+  const filePath = path.join(PROJECTS_ROOT, actualDir, currentSessionId + '.jsonl');
+  if (!fs.existsSync(filePath)) return { ok: false, reason: 'Session 檔案不存在' };
+
+  const history = [];
+  try {
+    const content = fs.readFileSync(filePath, 'utf8');
+    const lines = content.split('\n').filter(l => l.trim());
+    for (const line of lines) {
+      let ev;
+      try { ev = JSON.parse(line); } catch { continue; }
+      const msgType = ev.type;
+      if (msgType !== 'user' && msgType !== 'assistant') continue;
+      const parts = ev.message?.content;
+      let text = '';
+      if (Array.isArray(parts)) {
+        text = parts.filter(p => p.type === 'text' && p.text).map(p => p.text).join('\n').trim();
+      } else if (typeof parts === 'string') {
+        text = parts.trim();
+      }
+      if (!text) continue;
+      // 合併連續同角色訊息（Gemma jinja template 要求 user/assistant 嚴格交替）
+      const last = history[history.length - 1];
+      if (last && last.role === msgType) {
+        last.content += '\n\n' + text;
+      } else {
+        history.push({ role: msgType, content: text });
+      }
+    }
+  } catch (e) { return { ok: false, reason: '讀取失敗：' + e.message }; }
+
+  // Gemma 模板要求：開頭為 user、結尾為 assistant、嚴格 u/a 交替
+  while (history.length && history[0].role !== 'user') history.shift();
+  while (history.length && history[history.length - 1].role !== 'assistant') history.pop();
+
+  gemmaHistory = history;
+  return { ok: true, turns: history.length };
+}
+
+// /gmode — 切換 gemma 模式
 bot.onText(/\/gmode/, (msg) => {
   if (!isAllowed(msg.from.id)) return;
   if (!requireAuth(msg.chat.id)) return;
-  if (!gammaExecute) {
-    bot.sendMessage(msg.chat.id, '❌ gamma-v1 未安裝。');
+  if (!gemmaExecute) {
+    bot.sendMessage(msg.chat.id, '❌ gemma-v1 未安裝。');
     return;
   }
-  gammaMode = !gammaMode;
-  gammaHistory = []; // 切換時清空歷史
+  gemmaMode = !gemmaMode;
+  gemmaHistory = []; // 切換時清空歷史
   bot.sendMessage(msg.chat.id,
-    gammaMode
-      ? '🤖 *Gamma 模式開啟*\n普通訊息直接傳給 gamma（本機 gemma）\n\n輸入 `/gmode` 可關閉，`/gclear` 清空對話歷史'
-      : '💻 *Gamma 模式關閉*\n普通訊息回到 Claude Code',
+    gemmaMode
+      ? '🤖 *Gemma 模式開啟*\n普通訊息直接傳給 Gemma（本機）\n\n輸入 `/gmode` 可關閉，`/gclear` 清空對話歷史'
+      : '💻 *Gemma 模式關閉*\n普通訊息回到 Claude Code',
     { parse_mode: 'Markdown' }
   );
 });
 
-// /gclear — 清空 gamma 對話歷史
+// /gclear — 清空 gemma 對話歷史
 bot.onText(/\/gclear/, (msg) => {
   if (!isAllowed(msg.from.id)) return;
   if (!requireAuth(msg.chat.id)) return;
-  gammaHistory = [];
-  bot.sendMessage(msg.chat.id, '🧹 Gamma 對話歷史已清空。');
+  gemmaHistory = [];
+  bot.sendMessage(msg.chat.id, '🧹 Gemma 對話歷史已清空。');
 });
 
-// /gamma [flags] <task>
+// /gemma [flags] <task>
 // flags 同 bin/myclaw.js：--profile / --executor / --dir / --yes
-bot.onText(/\/gamma(.*)/, async (msg, match) => {
+bot.onText(/\/gemma(.*)/, async (msg, match) => {
   if (!isAllowed(msg.from.id)) return;
   if (!requireAuth(msg.chat.id)) return;
-  if (!gammaExecute) {
-    bot.sendMessage(msg.chat.id, '❌ gamma-v1 未安裝，請確認 gamma-v1/ 目錄存在。');
+  if (!gemmaExecute) {
+    bot.sendMessage(msg.chat.id, '❌ gemma-v1 未安裝，請確認 gemma-v1/ 目錄存在。');
     return;
   }
 
   const raw = (match[1] || '').trim();
   if (!raw) {
     bot.sendMessage(msg.chat.id,
-      '*gamma-v1 用法：*\n`/gamma <任務>`\n`/gamma --profile explorer <問題>`\n`/gamma --profile implementer <實作任務>`\n`/gamma --executor local_gamma4 <任務>`',
+      '*gemma 用法：*\n`/gemma <任務>`\n`/gemma --profile explorer <問題>`\n`/gemma --profile implementer <實作任務>`\n`/gemma --executor local_gemma4 <任務>`',
       { parse_mode: 'Markdown' }
     );
     return;
@@ -800,17 +990,17 @@ bot.onText(/\/gamma(.*)/, async (msg, match) => {
   }
   const prompt = promptParts.join(' ');
 
-  const statusMsg = await bot.sendMessage(msg.chat.id, '⚙️ gamma 路由中…');
+  const statusMsg = await bot.sendMessage(msg.chat.id, '⚙️ Gemma 路由中…');
   const msgId = statusMsg.message_id;
-  const gammaStart = Date.now();
-  const gammaTimer = setInterval(async () => {
-    const elapsed = Math.floor((Date.now() - gammaStart) / 1000);
-    await safeEdit(msg.chat.id, msgId, `⚙️ gamma 執行中… ${elapsed}s`);
+  const gemmaStart = Date.now();
+  const gemmaTimer = setInterval(async () => {
+    const elapsed = Math.floor((Date.now() - gemmaStart) / 1000);
+    await safeEdit(msg.chat.id, msgId, `⚙️ Gemma 執行中… ${elapsed}s`);
   }, 5000);
 
   try {
-    const result = await gammaExecute({ prompt, profile, executor, workDir: useWorkDir, skipConfirm });
-    clearInterval(gammaTimer);
+    const result = await gemmaExecute({ prompt, profile, executor, workDir: useWorkDir, skipConfirm });
+    clearInterval(gemmaTimer);
 
     if (result.blocked) {
       await bot.editMessageText(`🚫 *[BLOCKED]*\n${result.reason}`, { chat_id: msg.chat.id, message_id: msgId, parse_mode: 'Markdown' });
@@ -818,7 +1008,7 @@ bot.onText(/\/gamma(.*)/, async (msg, match) => {
     }
     if (result.needsConfirm) {
       await bot.editMessageText(
-        `⚠️ *確認操作*\n${result.confirmReason}\n\n重新傳送：\`/gamma --yes ${raw}\``,
+        `⚠️ *確認操作*\n${result.confirmReason}\n\n重新傳送：\`/gemma --yes ${raw}\``,
         { chat_id: msg.chat.id, message_id: msgId, parse_mode: 'Markdown' }
       );
       return;
@@ -836,8 +1026,8 @@ bot.onText(/\/gamma(.*)/, async (msg, match) => {
     await bot.editMessageText(text, { chat_id: msg.chat.id, message_id: msgId, parse_mode: 'Markdown' })
       .catch(() => bot.sendMessage(msg.chat.id, text, { parse_mode: 'Markdown' }));
   } catch (err) {
-    clearInterval(gammaTimer);
-    await bot.editMessageText(`❌ gamma-v1 錯誤：${err.message}`, { chat_id: msg.chat.id, message_id: msgId })
+    clearInterval(gemmaTimer);
+    await bot.editMessageText(`❌ gemma-v1 錯誤：${err.message}`, { chat_id: msg.chat.id, message_id: msgId })
       .catch(() => {});
   }
 });
@@ -942,15 +1132,10 @@ bot.on('message', async (msg) => {
     if (!requireAuth(msg.chat.id)) return;
     const text = msg.text.trim();
 
-    // 按鈕處理
-    if (text === '📂 MyClaw') {
-      workingDir = ALLOWED_DIRS[0];
-      newSession = true;
-      bot.sendMessage(msg.chat.id, `✅ 已切換至：\`${workingDir}\``, { parse_mode: 'Markdown', reply_markup: MAIN_KEYBOARD });
-      return;
-    }
-    if (text === '📂 Netivism') {
-      workingDir = ALLOWED_DIRS[1] || ALLOWED_DIRS[0];
+    // 按鈕處理：目錄切換（由 DIR_BUTTONS 動態匹配）
+    const dirBtn = DIR_BUTTONS.find(b => b.label === text);
+    if (dirBtn) {
+      workingDir = dirBtn.dir;
       newSession = true;
       bot.sendMessage(msg.chat.id, `✅ 已切換至：\`${workingDir}\``, { parse_mode: 'Markdown', reply_markup: MAIN_KEYBOARD });
       return;
@@ -988,10 +1173,10 @@ bot.on('message', async (msg) => {
       const sessLabel = currentSessionId
         ? `指定 \`${currentSessionId.slice(0, 8)}…\``
         : (newSession ? '新' : '繼續上次');
-      const gammaSuffix = gammaMode ? `\n*模式：* 🤖 Gamma（${gammaHistory.length / 2 | 0} 輪歷史）` : '';
+      const gemmaSuffix = gemmaMode ? `\n*模式：* 🤖 Gemma（${gemmaHistory.length / 2 | 0} 輪歷史）` : '';
       const autoSuffix = autoMode ? '\n*Auto Mode：* ⚠️ 開啟（跳過工具確認）' : '';
       bot.sendMessage(msg.chat.id,
-        `*狀態：* ${status}\n*目錄：* \`${workingDir}\`\n*Session：* ${sessLabel}${gammaSuffix}${autoSuffix}`,
+        `*狀態：* ${status}\n*目錄：* \`${workingDir}\`\n*Session：* ${sessLabel}${gemmaSuffix}${autoSuffix}`,
         { parse_mode: 'Markdown', reply_markup: MAIN_KEYBOARD }
       );
       return;
@@ -1018,12 +1203,12 @@ bot.on('message', async (msg) => {
     }
 
     if (text === '✨Model') {
-      const current = gammaMode ? 'gamma' : (claudeModel || 'sonnet');
+      const current = gemmaMode ? 'gemma' : (claudeModel || 'sonnet');
       bot.sendMessage(msg.chat.id, `✨ *Model 選擇*\n目前：\`${current}\`\n\n選擇要切換的模型：`, {
         parse_mode: 'Markdown',
         reply_markup: {
           inline_keyboard: [
-            [{ text: `${current === 'gamma'  ? '✅ ' : ''}🤖 Gamma（本機）`,  callback_data: 'model:gamma'  }],
+            [{ text: `${current === 'gemma'  ? '✅ ' : ''}🤖 Gemma（本機）`,  callback_data: 'model:gemma'  }],
             [{ text: `${current === 'haiku'  ? '✅ ' : ''}⚡ Haiku`,          callback_data: 'model:haiku'  }],
             [{ text: `${current === 'sonnet' ? '✅ ' : ''}🎵 Sonnet（預設）`, callback_data: 'model:sonnet' }],
             [{ text: `${current === 'opus'   ? '✅ ' : ''}🏛 Opus`,           callback_data: 'model:opus'   }],
@@ -1033,33 +1218,33 @@ bot.on('message', async (msg) => {
       return;
     }
 
-    // gamma 模式：普通訊息走 gamma，帶對話歷史
-    if (gammaMode && gammaExecute) {
-      const statusMsg = await bot.sendMessage(msg.chat.id, '🤖 gamma 思考中…');
+    // gemma 模式：普通訊息走 gemma，帶對話歷史
+    if (gemmaMode && gemmaExecute) {
+      const statusMsg = await bot.sendMessage(msg.chat.id, '🤖 Gemma 思考中…');
       const msgId = statusMsg.message_id;
-      const gammaStart = Date.now();
-      const gammaTimer = setInterval(async () => {
-        const elapsed = Math.floor((Date.now() - gammaStart) / 1000);
-        await safeEdit(msg.chat.id, msgId, `🤖 gamma 思考中… ${elapsed}s`);
+      const gemmaStart = Date.now();
+      const gemmaTimer = setInterval(async () => {
+        const elapsed = Math.floor((Date.now() - gemmaStart) / 1000);
+        await safeEdit(msg.chat.id, msgId, `🤖 Gemma 思考中… ${elapsed}s`);
       }, 5000);
 
       try {
-        const result = await gammaExecute({
+        const result = await gemmaExecute({
           prompt: text,
-          history: gammaHistory.slice(-GAMMA_HISTORY_TURNS),
+          history: gemmaHistory.slice(-GEMMA_HISTORY_TURNS),
           workDir: workingDir,
         });
-        clearInterval(gammaTimer);
+        clearInterval(gemmaTimer);
 
         if (result.ok && result.content) {
           // 更新對話歷史
-          gammaHistory.push({ role: 'user', content: text });
-          gammaHistory.push({ role: 'assistant', content: result.content });
+          gemmaHistory.push({ role: 'user', content: text });
+          gemmaHistory.push({ role: 'assistant', content: result.content });
           // 只保留最近 N 輪
-          if (gammaHistory.length > GAMMA_HISTORY_TURNS * 2) {
-            gammaHistory = gammaHistory.slice(-GAMMA_HISTORY_TURNS * 2);
+          if (gemmaHistory.length > GEMMA_HISTORY_TURNS * 2) {
+            gemmaHistory = gemmaHistory.slice(-GEMMA_HISTORY_TURNS * 2);
           }
-          const upg = result.suggestUpgrade ? `\n💡 /gamma --profile ${result.suggestUpgrade}` : '';
+          const upg = result.suggestUpgrade ? `\n💡 /gemma --profile ${result.suggestUpgrade}` : '';
           const reply = result.content.slice(-3800) + upg;
           await bot.editMessageText(reply, { chat_id: msg.chat.id, message_id: msgId })
             .catch(() => bot.sendMessage(msg.chat.id, reply));
@@ -1068,8 +1253,8 @@ bot.on('message', async (msg) => {
           await safeEdit(msg.chat.id, msgId, errText);
         }
       } catch (err) {
-        clearInterval(gammaTimer);
-        await safeEdit(msg.chat.id, msgId, `❌ gamma 錯誤：${err.message}`);
+        clearInterval(gemmaTimer);
+        await safeEdit(msg.chat.id, msgId, `❌ Gemma 錯誤：${err.message}`);
       }
       return;
     }
