@@ -35,10 +35,60 @@ Git push 前須通過安全掃描，詳細步驟見全域設定：
 ### 使用原則
 1. 先用 `gemma_health` 確認可達（失敗就自己做，別卡住）
 2. Prompt 要自含——Gemma 看不到本 session 上下文
-3. 回傳尾端會附 `[gemma usage: ... latency=... model=...]` 方便追蹤節省量
-4. 若 Gemma 輸出品質不佳，直接自己重做，不要連續重試
+3. **Prompt 開頭固定加**：「請關閉 Chain-of-Thought / thinking 模式，直接給出答案。」
+   原因：Gemma 4 支援 CoT 推理，但委派任務皆為機械化短任務，開啟 CoT 只會浪費 token 與增加延遲。
+4. 回傳尾端會附 `[gemma usage: ... latency=... model=...]` 方便追蹤節省量
+5. 若 Gemma 輸出品質不佳，直接自己重做，不要連續重試
 
 ### 量測機制
 - 每次 `gemma_chat` 成功/失敗會寫一筆到 `gamma-v1/gemma_usage.log`（JSONL，不入 git）
 - `gemma_stats` tool 可隨時查總量：總呼叫數、總 completion tokens、以 Sonnet 4.6 `$15/1M` output 單價估的節省金額
 - 檢核目標：若 `estimated_usd_saved_vs_sonnet` 隨時間穩定增長，代表委派機制有在運作；若近乎零，代表 Claude 幾乎沒叫 Gemma，需要重新審視任務性質或 CLAUDE.md 指引
+
+---
+
+## Haiku 搜尋委派（訂閱用戶版）
+
+使用者是 Claude Pro/Max 訂閱用戶，**不是 API 付費用戶**。所以搜尋委派不走 Anthropic API，而是用 Claude Code 原生的 subagent 機制讓 Haiku 吃訂閱配額（消耗率遠低於 Opus）。
+
+做法：`Agent` tool + `subagent_type: Explore` + `model: "haiku"` override。
+- 不需要 API key
+- 消耗訂閱配額，但 Haiku ≈ Opus 的 1/15（按官方 pricing 比例估）
+- 0 新程式碼、0 新基礎設施
+
+### 什麼任務該這樣委派
+- 找檔案：`Glob` 類任務（pattern 明確、不需要理解程式碼）
+- 找 symbol / keyword：`Grep` 類任務後做摘要
+- 盤點資料夾結構：列出某目錄下有什麼
+- 讀檔後抽取固定欄位：像 log 解析、config 列表
+
+### 什麼任務**不要**委派
+- 跨檔案邏輯推理（追 call graph、理解資料流）
+- 需要 Write/Edit/Bash 的任何工作
+- 架構判斷或多訊號整合
+- 使用者明確點名要 Claude 回答的問題
+
+### 使用範例
+```
+Agent({
+  description: "Find bot entry file",
+  subagent_type: "Explore",
+  model: "haiku",
+  prompt: "Find the main Telegram bot entry file in my-lobster/. Report file path and the line where bot is initialized. Under 100 words."
+})
+```
+
+### 觸發條件（強制）
+當 `UserPromptSubmit` hook 輸出 `[MODEL_ROUTER] tier=haiku` 時，**優先用 `Agent(subagent_type="Explore", model="haiku", prompt=...)` 委派**，不要用主 session 直接 Glob/Grep。這條規則讓 route hook 的判斷真正發生效果，而不是只印字串。
+
+### 量測（追蹤省幅，確保真的比較省）
+- 全域 `PostToolUse` hook（`~/.claude/hooks/delegation_tracker.py`）會對每次 Agent tool call 寫一筆到 `~/.claude/delegation-usage.log`（JSONL）
+- 欄位：`ts, session_id, subagent_type, model_override, prompt_chars, response_chars`
+- 跑 `python ~/.claude/delegation-report.py` 輸出：依 model tier 分桶的呼叫次數、估算 token、counterfactual USD 省幅（假設不委派就全走 Opus）
+- pricing 做 proxy：訂閱配額沒 per-call 計數，但消耗率比例和 API pricing 一致，所以 USD 估值雖非真實帳單，**方向與量級正確**
+- 檢核目標：若 report 的 `Saved` 隨時間穩定增長、`Calls` haiku 桶佔比上升，代表委派機制有在運作
+
+### 注意：曾有一個自建 Haiku MCP 被評估後刪除
+- 曾短暫建過 `gamma-v1/haiku-search/`（MCP server + Anthropic SDK），但那個架構的省錢算法假設 Opus API 付費單價 $75/1M，**對訂閱用戶不適用**——反而是「花 API 錢省訂閱配額」方向錯誤
+- 已整包刪除；`.mcp.json` 不要再加回 `haiku-search` entry
+- 若將來真的開 Anthropic API 付費帳戶才重新評估
