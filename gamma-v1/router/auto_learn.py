@@ -1,14 +1,17 @@
 """auto_learn.py — orchestrator called by Task Scheduler.
 
 Flow:
-  1. Run idle_guard.py in-process. Exit quietly if gates not met.
-  2. Check content log has grown since last successful run (no point re-distilling
-     the same corpus).
-  3. Call distill.py to refresh gemma_playbook.md.
-  4. Append a line to auto_learn.log for audit.
+  1. Run idle_guard.py — exit quietly if gates not met.
+  2. [Hourly] distill.py — refresh gemma_playbook.md when content log has grown.
+  3. [Daily, ~2am] analyze_sessions.py — 5-section segmented Gemma analysis of
+     14-day session transcripts. Writes to memory/_suggestions.md.
+  4. All runs write JSONL audit to auto_learn.log.
 
-All runs — pass or skip — write a single JSONL audit entry so you can inspect
-what happened via: Get-Content gamma-v1\\router\\auto_learn.log -Tail 20
+Flags:
+  --force      bypass idle_guard (still checks new-entries gate for distill)
+  --force-all  bypass every gate
+
+Review: Get-Content gamma-v1\\router\\auto_learn.log -Tail 20
 """
 import json
 import os
@@ -23,7 +26,10 @@ CONTENT_LOG = ROOT / "gemma_content.log"
 PLAYBOOK_PATH = ROOT / "gemma_playbook.md"
 AUDIT_LOG = HERE / "auto_learn.log"
 LAST_RUN_FILE = HERE / ".last_run"
+LAST_ANALYZE_FILE = HERE / ".last_analyze"
 MIN_NEW_ENTRIES_TO_DISTILL = int(os.environ.get("MIN_NEW_ENTRIES_TO_DISTILL", "5"))
+ANALYZE_HOUR_START = int(os.environ.get("ANALYZE_HOUR_START", "1"))   # 01:00
+ANALYZE_HOUR_END = int(os.environ.get("ANALYZE_HOUR_END", "5"))       # 05:00
 
 PY = sys.executable
 
@@ -58,6 +64,27 @@ def read_last_run_count() -> int:
 def write_last_run_count(n: int):
     try:
         LAST_RUN_FILE.write_text(str(n), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def analyze_due(force_all: bool) -> bool:
+    if force_all:
+        return True
+    hour = int(time.strftime("%H"))
+    if not (ANALYZE_HOUR_START <= hour < ANALYZE_HOUR_END):
+        return False
+    today = time.strftime("%Y-%m-%d")
+    try:
+        last = LAST_ANALYZE_FILE.read_text(encoding="utf-8").strip()
+        return last != today
+    except Exception:
+        return True
+
+
+def write_last_analyze():
+    try:
+        LAST_ANALYZE_FILE.write_text(time.strftime("%Y-%m-%d"), encoding="utf-8")
     except Exception:
         pass
 
@@ -136,6 +163,33 @@ def main():
         "playbook_path": str(PLAYBOOK_PATH),
         "playbook_exists": PLAYBOOK_PATH.exists(),
     })
+
+    # Step 3: daily session analysis (凌晨 1–5 點 + 今天還沒跑過)
+    if not analyze_due(force_all):
+        audit({"phase": "analyze", "ok": True, "skipped": True,
+               "reason": f"not in window ({ANALYZE_HOUR_START}–{ANALYZE_HOUR_END}h) or already ran today"})
+        return
+
+    t0 = time.time()
+    analyze_cmd = [PY, str(HERE / "analyze_sessions.py")]
+    if force_all:
+        analyze_cmd.append("--force")
+    try:
+        analyze = run(analyze_cmd, timeout=1800)  # 30 min max for 5 sections
+    except Exception as e:
+        audit({"phase": "analyze", "ok": False, "error": str(e)})
+        return
+
+    dt = time.time() - t0
+    if analyze.returncode != 0:
+        audit({"phase": "analyze", "ok": False, "returncode": analyze.returncode,
+               "stdout": analyze.stdout[-600:], "stderr": analyze.stderr[-400:],
+               "seconds": round(dt, 2)})
+        return
+
+    write_last_analyze()
+    last_line = next((l for l in reversed(analyze.stdout.splitlines()) if l.strip()), "")
+    audit({"phase": "analyze", "ok": True, "seconds": round(dt, 2), "summary": last_line})
 
 
 if __name__ == "__main__":

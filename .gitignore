@@ -16,6 +16,9 @@ gamma-v1/gemma_content.log
 gamma-v1/gemma_playbook.md
 gamma-v1/router/auto_learn.log
 gamma-v1/router/.last_run
+gamma-v1/router/.last_analyze
+gamma-v1/router/.analyze_progress.json
+gamma-v1/router/__pycache__/
 
 # SealCast 草稿（AI 產生內容，含本機路徑）
 SealCast/drafts/
