@@ -15,6 +15,19 @@ Git push 前須通過安全掃描，詳細步驟見全域設定：
 
 ---
 
+## 自動 Commit 機制（opt-in）
+
+本 repo 根目錄存在 `.claude-auto-commit` 標記檔，觸發 `~/.claude/hooks/auto-commit.py`
+在每次 `Edit` / `Write` 工具完成後自動 `git add` + `git commit` 該檔案。
+Commit message 由 Gemma 根據 diff 產生，失敗則 fallback 為 `chore(<file>): auto-commit`。
+
+- 關閉方式：刪除 `.claude-auto-commit`，或設定 `CLAUDE_AUTO_COMMIT_DISABLE=1`
+- Dry-run：`CLAUDE_AUTO_COMMIT_DRY_RUN=1`（僅印訊息不 commit）
+- Commit 只涵蓋當下變更的單一檔案，不會 `git add .`
+- `.gitignore` 的檔案會被 `git check-ignore` 過濾掉
+
+---
+
 ## Gemma 本地模型委派（MCP）
 
 本專案註冊了 `gemma-local` MCP server（見 `.mcp.json`），暴露 `gemma_chat`、`gemma_health`、`gemma_stats` 三個 tool，接到本機 LM Studio 的 Gemma。
