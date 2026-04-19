@@ -124,6 +124,9 @@ async function handleToolCall(name, args) {
       ts: Date.now(),
       ok: true,
       model: res.model,
+      executor: res.executor,
+      fallback_used: !!res.fellBackFrom,
+      primary_error: res.fellBackFrom || null,
       latencyMs: res.latencyMs,
       prompt_len: prompt.length,
       content_len: res.content.length,
@@ -137,12 +140,15 @@ async function handleToolCall(name, args) {
       prompt,
       response: res.content,
       model: res.model,
+      executor: res.executor,
+      fallback_used: !!res.fellBackFrom,
       prompt_tokens: res.usage?.prompt_tokens ?? null,
       completion_tokens: res.usage?.completion_tokens ?? null,
     });
+    const fbMarker = res.fellBackFrom ? ' FALLBACK' : '';
     const footer = res.usage
-      ? `\n\n---\n[gemma usage: in=${res.usage.prompt_tokens ?? '?'} out=${res.usage.completion_tokens ?? '?'} latency=${res.latencyMs}ms model=${res.model}]`
-      : `\n\n---\n[gemma latency=${res.latencyMs}ms model=${res.model}]`;
+      ? `\n\n---\n[gemma usage: in=${res.usage.prompt_tokens ?? '?'} out=${res.usage.completion_tokens ?? '?'} latency=${res.latencyMs}ms model=${res.model}${fbMarker}]`
+      : `\n\n---\n[gemma latency=${res.latencyMs}ms model=${res.model}${fbMarker}]`;
     return { content: [{ type: 'text', text: res.content + footer }] };
   }
   if (name === 'gemma_health') {
