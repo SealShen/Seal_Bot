@@ -28,10 +28,20 @@ const CONFIRM_RULES = [
 // Write keywords that are blocked in read-only mode
 const WRITE_PATTERN = /\b(create|write|delete|modify|update|insert|drop|truncate|mkdir|rm\b|del\b|append|overwrite)\b/i;
 
-// Directories that are allowed for absolute path access
-// Read from env: ALLOWED_DIRS=dir1;dir2 or fall back to CLAUDE_WORKING_DIR
-const _allowed = process.env.ALLOWED_DIRS || process.env.CLAUDE_WORKING_DIR || '';
-const ALLOWED_BASE_DIRS = _allowed.split(';').map(s => s.trim()).filter(Boolean);
+// Dangerous path prefixes — always blocked regardless of other rules (Windows absolute paths)
+const DANGEROUS_PATH_PREFIXES = [
+  'c:\\windows\\',
+  'c:\\program files\\',
+  'c:\\program files (x86)\\',
+];
+
+// Dangerous path patterns (regex) — catches user-specific sensitive dirs
+const DANGEROUS_PATH_PATTERNS = [
+  /[a-z]:[/\\]users[/\\][^/\\]+[/\\]\.ssh/i,
+  /[a-z]:[/\\]users[/\\][^/\\]+[/\\]\.aws/i,
+  /[a-z]:[/\\]users[/\\][^/\\]+[/\\]\.gnupg/i,
+  /[a-z]:[/\\]users[/\\][^/\\]+[/\\]appdata[/\\]roaming[/\\]microsoft[/\\]/i,
+];
 
 /**
  * Check a prompt against policy rules.
@@ -54,15 +64,15 @@ function check(prompt, { readOnly = false, workDir = null } = {}) {
     return { action: 'block', reason: 'Read-only profile: 禁止寫入操作' };
   }
 
-  // 3. Absolute-path escape check
+  // 3. Dangerous-path check (denylist)
   const absPaths = prompt.match(/[a-zA-Z]:[/\\][^\s,'"`)]+/g) || [];
   for (const p of absPaths) {
-    const norm = p.replace(/\//g, '\\');
-    const allowed = ALLOWED_BASE_DIRS.some(
-      d => norm.toLowerCase().startsWith(d.toLowerCase())
-    );
-    if (!allowed) {
-      return { action: 'block', reason: `禁止存取白名單以外的路徑：${p}` };
+    const norm = p.replace(/\//g, '\\').toLowerCase();
+    if (DANGEROUS_PATH_PREFIXES.some(d => norm.startsWith(d))) {
+      return { action: 'block', reason: `禁止存取危險系統路徑：${p}` };
+    }
+    if (DANGEROUS_PATH_PATTERNS.some(re => re.test(p))) {
+      return { action: 'block', reason: `禁止存取敏感使用者路徑：${p}` };
     }
   }
 

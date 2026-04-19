@@ -18,12 +18,26 @@ const { chat, healthCheck } = require(path.join(__dirname, 'adapters', 'lmstudio
 const PROTOCOL_VERSION = '2024-11-05';
 const SERVER_INFO = { name: 'gemma-local', version: '0.1.0' };
 const USAGE_LOG = path.join(__dirname, 'gemma_usage.log');
+const CONTENT_LOG = path.join(__dirname, 'gemma_content.log');
+const PLAYBOOK_PATH = path.join(__dirname, 'gemma_playbook.md');
 // Counterfactual price: if Claude had produced these tokens itself.
 // Sonnet 4.6 output = $15 / 1M tokens.
 const SONNET_OUTPUT_USD_PER_TOKEN = 15 / 1_000_000;
 
 function appendUsageLog(entry) {
   try { fs.appendFileSync(USAGE_LOG, JSON.stringify(entry) + '\n'); } catch (e) { log('usage log write failed', e.message); }
+}
+
+function appendContentLog(entry) {
+  try { fs.appendFileSync(CONTENT_LOG, JSON.stringify(entry) + '\n'); } catch (e) { log('content log write failed', e.message); }
+}
+
+// Live-read playbook per call so distill output takes effect without MCP restart.
+function readPlaybook() {
+  try {
+    const raw = fs.readFileSync(PLAYBOOK_PATH, 'utf8').trim();
+    return raw || null;
+  } catch { return null; }
 }
 
 function readUsageLog() {
@@ -94,9 +108,11 @@ async function handleToolCall(name, args) {
     if (typeof prompt !== 'string' || !prompt.trim()) {
       return { isError: true, content: [{ type: 'text', text: 'Missing required parameter: prompt (non-empty string).' }] };
     }
+    const playbook = readPlaybook();
+    const mergedSystem = [playbook, system].filter(Boolean).join('\n\n---\n\n') || null;
     const res = await chat({
       prompt,
-      systemPrompt: system || null,
+      systemPrompt: mergedSystem,
       maxTokens: typeof max_tokens === 'number' ? max_tokens : undefined,
       temperature: typeof temperature === 'number' ? temperature : undefined,
     });
@@ -111,6 +127,16 @@ async function handleToolCall(name, args) {
       latencyMs: res.latencyMs,
       prompt_len: prompt.length,
       content_len: res.content.length,
+      prompt_tokens: res.usage?.prompt_tokens ?? null,
+      completion_tokens: res.usage?.completion_tokens ?? null,
+      playbook_used: playbook ? playbook.length : 0,
+    });
+    appendContentLog({
+      ts: Date.now(),
+      system: system || null,
+      prompt,
+      response: res.content,
+      model: res.model,
       prompt_tokens: res.usage?.prompt_tokens ?? null,
       completion_tokens: res.usage?.completion_tokens ?? null,
     });

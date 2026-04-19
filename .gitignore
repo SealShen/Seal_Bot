@@ -12,6 +12,10 @@
 # Gamma 稽核日誌（大量機器產生，不需上傳）
 **/logs/
 gamma-v1/gemma_usage.log
+gamma-v1/gemma_content.log
+gamma-v1/gemma_playbook.md
+gamma-v1/router/auto_learn.log
+gamma-v1/router/.last_run
 
 # SealCast 草稿（AI 產生內容，含本機路徑）
 SealCast/drafts/
