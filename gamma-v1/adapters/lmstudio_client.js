@@ -96,8 +96,10 @@ async function healthCheck(baseUrl) {
 function _shouldFallback(errMsg) {
   if (!errMsg) return false;
   const s = String(errMsg);
-  // Retryable: timeout / network / rate-limit / server error / empty content
-  return /timed out|ECONNREFUSED|ECONNRESET|ENOTFOUND|ETIMEDOUT|HTTP 429|HTTP 5\d\d|empty content/i.test(s);
+  // Blacklist: these indicate misconfiguration (wrong key, bad request) — fallback won't help.
+  if (/HTTP 40[013]/i.test(s)) return false;
+  // Everything else (timeout / network / 404 / 408 / 429 / 5xx / non-JSON / empty content) retries on fallback.
+  return true;
 }
 
 async function _chatOnce(config, messages, temperature, maxTokens) {
