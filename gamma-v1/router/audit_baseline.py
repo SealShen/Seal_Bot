@@ -104,6 +104,14 @@ def extract_prompts():
                     text = text.strip()
                     if len(text) < MIN_CHARS:
                         continue
+                    # Skip system-generated pseudo-user messages (not real prompts)
+                    if text.startswith("<local-command-caveat>") or text.startswith("Caveat:"):
+                        continue
+                    if text == "[Request interrupted by user]":
+                        continue
+                    # Skip outlier huge pastes (likely skill/doc dumps, not real prompts)
+                    if len(text) > 10000:
+                        continue
                     prompts.append({
                         "ts": obj.get("timestamp", ""),
                         "session": sid,
