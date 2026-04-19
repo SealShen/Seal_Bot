@@ -144,14 +144,25 @@ def classify_batch(batch):
     headers = {"Content-Type": "application/json"}
     if KEY:
         headers["Authorization"] = f"Bearer {KEY}"
-    req = urllib.request.Request(BASE + "/chat/completions",
-                                  data=json.dumps(body).encode(),
-                                  headers=headers, method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as r:
-            resp = json.loads(r.read().decode("utf-8"))
-    except Exception as e:
-        return [None] * len(batch), 0, 0, str(e)
+    data = json.dumps(body).encode()
+    resp = None
+    last_err = None
+    for attempt, backoff in enumerate([0] + RETRY_BACKOFFS):
+        if backoff:
+            time.sleep(backoff)
+        try:
+            req = urllib.request.Request(BASE + "/chat/completions", data=data, headers=headers, method="POST")
+            with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as r:
+                resp = json.loads(r.read().decode("utf-8"))
+            break
+        except urllib.error.HTTPError as e:
+            last_err = f"HTTP {e.code}"
+            if e.code not in (429, 500, 502, 503, 504):
+                return [None] * len(batch), 0, 0, last_err
+        except Exception as e:
+            last_err = str(e)
+    if resp is None:
+        return [None] * len(batch), 0, 0, last_err
 
     msg = (resp.get("choices") or [{}])[0].get("message", {})
     content = msg.get("content") or ""
