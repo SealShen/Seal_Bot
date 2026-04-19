@@ -44,8 +44,9 @@ DAYS = 14
 BATCH_SIZE = 15
 MIN_CHARS = 15
 MAX_CHARS_FOR_CLASSIFIER = 500
-SLEEP_BETWEEN_CALLS = 4.5  # respect ~15 RPM
+SLEEP_BETWEEN_CALLS = 8.0  # conservative — free tier RPM bursts out at ~10 in practice
 REQUEST_TIMEOUT = 60
+RETRY_BACKOFFS = [20, 45, 90]  # seconds — retry 429/503 with exponential pause
 
 CATEGORIES = ["rewrite", "summarize", "search", "doc_mechanical", "code", "analysis", "other"]
 DELEGATABLE_TEXT = {"rewrite", "summarize", "doc_mechanical"}
