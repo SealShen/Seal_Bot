@@ -116,6 +116,21 @@ def main():
         audit({"phase": "guard", "ok": False, "skipped": True, "reason": "gates not met"})
         sys.exit(0)
 
+    # Step 0: cheap housekeeping — delete draft files untouched for 7+ days
+    try:
+        cleanup = run([PY, str(HERE / "cleanup_drafts.py")], timeout=30)
+        last_line = next((l for l in reversed(cleanup.stdout.splitlines()) if l.strip()), "")
+        cleanup_result = {}
+        try:
+            cleanup_result = json.loads(last_line)
+        except Exception:
+            pass
+        audit({"phase": "cleanup", "ok": cleanup.returncode == 0,
+               "deleted": cleanup_result.get("deleted", []),
+               "kept_fresh_count": len(cleanup_result.get("kept_fresh", []))})
+    except Exception as e:
+        audit({"phase": "cleanup", "ok": False, "error": str(e)})
+
     # Gate 2: enough new entries since last run
     total = content_log_line_count()
     last = read_last_run_count()
