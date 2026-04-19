@@ -13,6 +13,22 @@
 
 const fs = require('fs');
 const path = require('path');
+
+// Load gamma-v1/.env into process.env at startup so FALLBACK_* and LMSTUDIO_* vars
+// are available regardless of how the MCP server was launched (direct / Claude Code).
+(function loadDotenv() {
+  try {
+    const raw = fs.readFileSync(path.join(__dirname, '.env'), 'utf8');
+    for (const line of raw.split(/\r?\n/)) {
+      if (!line || line.trim().startsWith('#')) continue;
+      const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*?)\s*$/i);
+      if (!m) continue;
+      const [, k, v] = m;
+      if (!(k in process.env)) process.env[k] = v.replace(/^['"]|['"]$/g, '');
+    }
+  } catch {}
+})();
+
 const { chat, healthCheck } = require(path.join(__dirname, 'adapters', 'lmstudio_client.js'));
 
 const PROTOCOL_VERSION = '2024-11-05';
