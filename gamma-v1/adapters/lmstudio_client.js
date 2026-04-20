@@ -213,10 +213,17 @@ async function _chatOnce(config, messages, temperature, maxTokens) {
 }
 
 /**
- * Send a chat completion. Tries primary first; falls back to FALLBACK_* config
- * on retryable failures if configured.
+ * Send a chat completion.
  *
- * @returns {Promise<{ok, executor, model, content, thinking, usage, latencyMs, error?, fellBackFrom?}>}
+ * Default path (no explicit `model`):
+ *   Cascade through Gemini model layers, skipping any marked dead today.
+ *   If the entire cascade fails, fall back to local LM Studio (FALLBACK_*).
+ *
+ * Explicit `model` path:
+ *   Single-shot on that model via LMSTUDIO_* config, with the legacy
+ *   primary → FALLBACK_* fallback behavior (no cascade).
+ *
+ * @returns {Promise<{ok, executor, model, content, thinking, usage, latencyMs, error?, fellBackFrom?, cascadeAttempts?}>}
  */
 async function chat({
   prompt,
@@ -228,45 +235,115 @@ async function chat({
   baseUrl      = null,
   timeout      = null,
 } = {}) {
-  const primary = {
-    baseUrl: baseUrl || process.env.LMSTUDIO_BASE_URL || DEFAULT_BASE_URL,
-    model:   model   || process.env.LMSTUDIO_MODEL    || DEFAULT_MODEL,
-    apiKey:  process.env.LMSTUDIO_API_KEY || null,
-    timeout: timeout || parseInt(process.env.LMSTUDIO_TIMEOUT || '0') || DEFAULT_TIMEOUT,
-    label:   'primary',
-  };
-
   const messages = [];
   if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
   for (const turn of history) messages.push(turn);
   messages.push({ role: 'user', content: prompt });
 
-  const primaryRes = await _chatOnce(primary, messages, temperature, maxTokens);
-  if (primaryRes.ok) return primaryRes;
+  const effectiveBase    = baseUrl || process.env.LMSTUDIO_BASE_URL || DEFAULT_BASE_URL;
+  const effectiveTimeout = timeout || parseInt(process.env.LMSTUDIO_TIMEOUT || '0') || DEFAULT_TIMEOUT;
+  const apiKey           = process.env.LMSTUDIO_API_KEY || null;
 
   const fallbackBase = process.env.FALLBACK_BASE_URL;
-  if (!fallbackBase || !_shouldFallback(primaryRes.error)) {
-    return primaryRes;
-  }
-
-  const fallback = {
+  const fallbackCfg = fallbackBase ? {
     baseUrl: fallbackBase,
     model:   process.env.FALLBACK_MODEL || DEFAULT_MODEL,
     apiKey:  process.env.FALLBACK_API_KEY || null,
     timeout: parseInt(process.env.FALLBACK_TIMEOUT || '0') || DEFAULT_TIMEOUT,
-    label:   'fallback',
-  };
+    label:   'local_fallback',
+  } : null;
 
-  const fallbackRes = await _chatOnce(fallback, messages, temperature, maxTokens);
-  if (fallbackRes.ok) {
-    return { ...fallbackRes, fellBackFrom: primaryRes.error };
+  // ── Legacy single-shot path (caller specified model explicitly) ──
+  if (model) {
+    const primary = {
+      baseUrl: effectiveBase,
+      model,
+      apiKey,
+      timeout: effectiveTimeout,
+      label:   'primary',
+    };
+    const primaryRes = await _chatOnce(primary, messages, temperature, maxTokens);
+    if (primaryRes.ok) return primaryRes;
+    if (!fallbackCfg || !_shouldFallback(primaryRes.error)) return primaryRes;
+
+    const fbRes = await _chatOnce(fallbackCfg, messages, temperature, maxTokens);
+    if (fbRes.ok) return { ...fbRes, fellBackFrom: primaryRes.error };
+    return {
+      ok:        false,
+      executor:  'both_failed',
+      error:     `primary: ${primaryRes.error || 'unknown'}; fallback: ${fbRes.error || 'unknown'}`,
+      latencyMs: (primaryRes.latencyMs || 0) + (fbRes.latencyMs || 0),
+    };
   }
-  // Both failed — return combined error; primary error first (usually the actionable one).
+
+  // ── Cascade path (default) ──
+  const cascade = getCascadeList();
+  const state = loadCascadeState();
+  const attempts = [];
+  let hardError = null;  // set on HTTP 400/401/403 — breaks cascade early
+  let totalMs = 0;
+
+  for (const layerModel of cascade) {
+    if (state.dead_layers.includes(layerModel)) {
+      attempts.push({ model: layerModel, skipped: 'sticky_dead' });
+      continue;
+    }
+    const cfg = {
+      baseUrl: effectiveBase,
+      model:   layerModel,
+      apiKey,
+      timeout: effectiveTimeout,
+      label:   `cascade:${layerModel}`,
+    };
+    const res = await _chatOnce(cfg, messages, temperature, maxTokens);
+    totalMs += res.latencyMs || 0;
+
+    if (res.ok) {
+      attempts.push({ model: layerModel, ok: true, ms: res.latencyMs });
+      return { ...res, cascadeAttempts: attempts };
+    }
+
+    attempts.push({ model: layerModel, ok: false, ms: res.latencyMs, error: res.error });
+
+    // 429 → mark layer dead for the rest of the PT day
+    if (res.error && /\b429\b|HTTP 429/i.test(res.error)) {
+      markLayerDead(state, layerModel);
+      continue;
+    }
+    // Non-retryable → break cascade (next layer won't fix misconfiguration)
+    if (res.error && /HTTP 40[013]/i.test(res.error)) {
+      hardError = res.error;
+      break;
+    }
+    // Other retryable errors (timeout/5xx/empty) → try next layer
+  }
+
+  // Cascade exhausted — try local fallback (unless hard error encountered)
+  if (fallbackCfg && !hardError) {
+    const fbRes = await _chatOnce(fallbackCfg, messages, temperature, maxTokens);
+    totalMs += fbRes.latencyMs || 0;
+    if (fbRes.ok) {
+      return {
+        ...fbRes,
+        fellBackFrom: 'cascade_exhausted',
+        cascadeAttempts: attempts,
+      };
+    }
+    return {
+      ok:        false,
+      executor:  'all_failed',
+      error:     `cascade exhausted + local fallback: ${fbRes.error || 'unknown'}`,
+      latencyMs: totalMs,
+      cascadeAttempts: attempts,
+    };
+  }
+
   return {
     ok:        false,
-    executor:  'both_failed',
-    error:     `primary: ${primaryRes.error || 'unknown'}; fallback: ${fallbackRes.error || 'unknown'}`,
-    latencyMs: (primaryRes.latencyMs || 0) + (fallbackRes.latencyMs || 0),
+    executor:  hardError ? 'cascade_hard_error' : 'cascade_exhausted_no_fallback',
+    error:     hardError || (attempts.length ? attempts.map(a => `${a.model}: ${a.error || a.skipped}`).join('; ') : 'cascade empty'),
+    latencyMs: totalMs,
+    cascadeAttempts: attempts,
   };
 }
 
