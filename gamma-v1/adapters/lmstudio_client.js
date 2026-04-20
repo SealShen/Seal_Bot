@@ -1,20 +1,87 @@
 'use strict';
 /**
  * lmstudio_client.js
- * OpenAI-compatible chat adapter with primary → fallback routing.
+ * OpenAI-compatible chat adapter with Gemini cascade + local fallback.
  *
- * Primary config:  LMSTUDIO_BASE_URL / LMSTUDIO_MODEL / LMSTUDIO_API_KEY / LMSTUDIO_TIMEOUT
+ * Cascade order (when no explicit model given):
+ *   gemini-2.5-flash → gemini-2.5-flash-lite → gemini-2.0-flash → gemini-2.0-flash-lite
+ *   → local (FALLBACK_*)
+ * Override via GEMINI_CASCADE_MODELS env (comma-separated).
+ *
+ * Shared sticky state with C:/Users/leond/.claude/hooks/prompt_router.py:
+ *   ~/.claude/gemini-cascade-state.json — layers that 429'd today are skipped
+ *   until PT midnight. Both the hook classifier and this MCP adapter contribute
+ *   to and consume this state so the cascade learns once per day.
+ *
+ * Primary config:  LMSTUDIO_BASE_URL / LMSTUDIO_API_KEY / LMSTUDIO_TIMEOUT (model names from cascade list)
  * Fallback config: FALLBACK_BASE_URL / FALLBACK_MODEL / FALLBACK_API_KEY / FALLBACK_TIMEOUT
  *
  * Fallback triggers only on retryable errors (timeout / network / 429 / 5xx / empty content).
- * Hard errors like 401/403/400 return immediately — fallback won't fix misconfiguration.
+ * Hard errors like 401/403/400 short-circuit cascade (misconfiguration won't heal layer-by-layer).
  */
 const http  = require('http');
 const https = require('https');
+const fs    = require('fs');
+const os    = require('os');
+const path  = require('path');
 
 const DEFAULT_BASE_URL = 'http://localhost:1234/v1';
 const DEFAULT_MODEL    = 'local-model';
 const DEFAULT_TIMEOUT  = 60000;
+
+const DEFAULT_CASCADE = [
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
+  'gemini-2.0-flash',
+  'gemini-2.0-flash-lite',
+];
+
+const CASCADE_STATE_PATH = path.join(os.homedir(), '.claude', 'gemini-cascade-state.json');
+
+function todayPtStr() {
+  // PT = UTC-8; use millisecond shift then format YYYY-MM-DD
+  const now = new Date();
+  const pt = new Date(now.getTime() - 8 * 3600 * 1000);
+  return pt.toISOString().slice(0, 10);
+}
+
+function loadCascadeState() {
+  const today = todayPtStr();
+  try {
+    const raw = fs.readFileSync(CASCADE_STATE_PATH, 'utf-8');
+    const state = JSON.parse(raw);
+    if (state.date_pt !== today) {
+      return { date_pt: today, dead_layers: [] };
+    }
+    if (!Array.isArray(state.dead_layers)) state.dead_layers = [];
+    return state;
+  } catch {
+    return { date_pt: today, dead_layers: [] };
+  }
+}
+
+function saveCascadeState(state) {
+  try {
+    const dir = path.dirname(CASCADE_STATE_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(CASCADE_STATE_PATH, JSON.stringify(state), 'utf-8');
+  } catch { /* logging failure must not block */ }
+}
+
+function markLayerDead(state, layer) {
+  if (!state.dead_layers.includes(layer)) {
+    state.dead_layers.push(layer);
+    saveCascadeState(state);
+  }
+}
+
+function getCascadeList() {
+  const envList = process.env.GEMINI_CASCADE_MODELS;
+  if (envList && envList.trim()) {
+    return envList.split(',').map(s => s.trim()).filter(Boolean);
+  }
+  return DEFAULT_CASCADE.slice();
+}
 
 function httpRequest(baseUrl, pathname, body, timeoutMs, apiKey) {
   return new Promise((resolve, reject) => {
