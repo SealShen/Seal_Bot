@@ -97,7 +97,7 @@ gamma-v1/
 ## Executor 細節
 
 ### local_gamma4 (LM Studio)
-- 呼叫 `http://localhost:1234/v1/chat/completions`（或 env 設定的 `LMSTUDIO_BASE_URL`）
+- 呼叫 `http://localhost:1234/v1/chat/completions`（或 env 設定的 `GOOGLE_AI_BASE_URL`）
 - 不消耗任何外部 token
 - 適合探索型、只讀、快速草稿
 
