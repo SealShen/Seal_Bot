@@ -13,7 +13,7 @@
  *   until PT midnight. Both the hook classifier and this MCP adapter contribute
  *   to and consume this state so the cascade learns once per day.
  *
- * Primary config:  LMSTUDIO_BASE_URL / LMSTUDIO_API_KEY / LMSTUDIO_TIMEOUT (model names from cascade list)
+ * Primary config:  GOOGLE_AI_BASE_URL / LMSTUDIO_API_KEY / LMSTUDIO_TIMEOUT (model names from cascade list)
  * Fallback config: FALLBACK_BASE_URL / FALLBACK_MODEL / FALLBACK_API_KEY / FALLBACK_TIMEOUT
  *
  * Fallback triggers only on retryable errors (timeout / network / 429 / 5xx / empty content).
@@ -141,7 +141,7 @@ function httpRequest(baseUrl, pathname, body, timeoutMs, apiKey) {
  * Quick reachability check — GETs /models on primary, returns true/false.
  */
 async function healthCheck(baseUrl) {
-  const _base = baseUrl || process.env.LMSTUDIO_BASE_URL || DEFAULT_BASE_URL;
+  const _base = baseUrl || process.env.GOOGLE_AI_BASE_URL || DEFAULT_BASE_URL;
   return new Promise((resolve) => {
     try {
       const url = new URL(_base.replace(/\/$/, '') + '/models');
@@ -240,7 +240,7 @@ async function chat({
   for (const turn of history) messages.push(turn);
   messages.push({ role: 'user', content: prompt });
 
-  const effectiveBase    = baseUrl || process.env.LMSTUDIO_BASE_URL || DEFAULT_BASE_URL;
+  const effectiveBase    = baseUrl || process.env.GOOGLE_AI_BASE_URL || DEFAULT_BASE_URL;
   const effectiveTimeout = timeout || parseInt(process.env.LMSTUDIO_TIMEOUT || '0') || DEFAULT_TIMEOUT;
   const apiKey           = process.env.LMSTUDIO_API_KEY || null;
 
