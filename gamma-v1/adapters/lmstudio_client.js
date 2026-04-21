@@ -305,8 +305,8 @@ async function chat({
 
     attempts.push({ model: layerModel, ok: false, ms: res.latencyMs, error: res.error });
 
-    // 429 → mark layer dead for the rest of the PT day
-    if (res.error && /\b429\b|HTTP 429/i.test(res.error)) {
+    // 429 or 404 → mark layer dead for the rest of the PT day, try next
+    if (res.error && (/\b429\b|HTTP 429/i.test(res.error) || /HTTP 404/i.test(res.error))) {
       markLayerDead(state, layerModel);
       continue;
     }
