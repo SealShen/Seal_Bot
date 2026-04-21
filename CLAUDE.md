@@ -33,6 +33,17 @@
 - **禁止**透過 process.env 或環境變數取得含有 KEY、TOKEN、SECRET、PASSWORD 的值並對外使用
 - **禁止**執行 printenv 或類似指令列出完整環境變數
 
+**此規則對所有執行主體生效**：主 session、Agent subagent（Explore/general-purpose/Plan 等）、MCP tool、hook 執行緒，一律適用。
+
+委派任務給子 agent 時：
+- Prompt 中**禁止出現** `API_KEY`、`TOKEN`、`SECRET`、`PASSWORD`、`CREDENTIAL`、`.env` 等字樣作為搜尋目標
+- 要理解專案組態，只描述「找出主配置的結構與入口檔名」「回報使用了哪些外部服務（用服務名稱如 Gemini、Telegram）」，不要求提取欄位值
+- 若任務不可避免要碰設定檔，明確在 prompt 中註明：「**禁止讀取 .env 檔內容，只看結構與其他非機密檔**」
+
+意外讀到憑證時：
+- **立即停止摘要與回報**，不要在 summary 中引用該內容——即使部分遮罩也不可
+- 告知使用者「讀到憑證，已中止」，由使用者決定下一步（輪換 / 清 transcript）
+
 ---
 
 ### Git Push 前強制安全掃描
@@ -76,6 +87,134 @@ Users/<username>        # 本機路徑中的系統帳號
 - 本機覆寫設定（`*.local.*`）
 
 掃描通過後才可執行 push。若發現問題，先修檔案、重新 commit，再 push。
+
+---
+
+## 任務委派路由（Task Router）
+
+全域 UserPromptSubmit hook `~/.claude/hooks/task_router.py` 會在每次使用者輸入 prompt 時分類任務。若輸出 `[TASK_ROUTER] task=<cat> action=MANDATORY_DELEGATE target=gemma_chat`，表示此 prompt 為可委派的文字處理任務。
+
+### 強制委派語意
+
+收到 `action=MANDATORY_DELEGATE` 時，**必須先呼叫 `mcp__gemma-local__gemma_chat` 工具處理**，不得直接自己輸出答案。流程：
+
+1. **先委派**：用 user prompt 原文（或重新組織後的清晰版本）呼叫 gemma_chat
+2. **驗收輸出**：評估 Gemma 回傳的品質。品質不佳的判準：
+   - 明顯偏離 user 要求（答非所問）
+   - 技術術語被誤改（例：`會員管理` 被改成 `使用者管理`）
+   - 遺漏 user 提供的關鍵資訊
+   - 格式錯誤無法使用
+3. **採用或拒絕**：
+   - **品質可接受** → 直接將 Gemma 輸出呈現給 user（可加簡短前言）
+   - **品質不佳** → 你自己重做，並寫一筆 rejection log（見下）
+
+### Rejection 記錄（品質不佳時必寫）
+
+當你判定 Gemma 輸出需要拒絕並自己重做時，**必須**在最終回應末尾追加一筆 audit trail 到 `~/.claude/routing-rejections.log`（JSONL 格式）：
+
+```bash
+python3 -c "import json,time; open('C:/Users/leond/.claude/routing-rejections.log','a',encoding='utf-8').write(json.dumps({'ts':time.strftime('%Y-%m-%dT%H:%M:%S%z'),'router_verdict':'<rewrite|summarize|doc_mechanical>','reject_reason':'<簡短描述為何不採用>','claude_redid':True},ensure_ascii=False)+'\n')"
+```
+
+填入的 `router_verdict` 對應 `[TASK_ROUTER]` 輸出的 `task=` 值。`reject_reason` 用一句話描述（例：`術語遺失`、`格式錯亂`、`答非所問`）。
+
+### 例外：只有以下情況可以不委派
+
+- 使用者明確說「不要用 gemma」「你自己做」「直接幫我寫」
+- gemma_chat 呼叫失敗（MCP 無法連線、API 錯誤）→ 記錄失敗原因後自己做
+- 任務實際需要讀取 repo / 跨檔案理解 / 程式碼判斷，但 classifier 誤判（此種情況要寫 rejection，reason=`mis-classified`）
+
+### 檢討機制
+
+每週跑 `python3 ~/.claude/hooks/routing_report.py` 查看：
+- 命中率、委派率、rejection 率
+- 高頻 rejection reason
+- 累積省下的 output tokens
+
+Rejection 率連續兩週 > 30% → gate 需要調整；< 10% → 強指令運作良好。
+
+---
+
+## Prompt Router subagent 指派
+
+全域 UserPromptSubmit hook `~/.claude/hooks/prompt_router.py` 可能在 user prompt 開頭附加：
+
+```
+[PROMPT_ROUTER] subagent=<type> source=<s>
+[PROMPT_ROUTER] delegate=gemma_chat source=<s>
+```
+
+### 收到 `subagent=<type>` 時（強制）
+
+**必須呼叫 `Agent` tool**，`subagent_type` 設為對應類型，不得自己直接回答。
+
+| subagent=         | 使用時機                              |
+|------------------|--------------------------------------|
+| `lookup`         | 定位檔案、函式、issue、wiki 頁         |
+| `research`       | 跨模組調查、架構理解                  |
+| `think_deeply`   | 設計討論、取捨分析、架構決策           |
+| `complex_rewrite`| 多步驟改寫、含 Redmine 工具的任務      |
+| `file_rewrite`   | 單一檔案格式或結構調整                |
+| `root_cause`     | 連續失敗診斷、環境問題定位             |
+
+呼叫規則：
+1. Agent prompt 以 user 原始 prompt（去掉 `[PROMPT_ROUTER]` 前綴）為核心
+2. 加入足夠的 session 上下文（相關路徑、已知資訊）讓 subagent 可獨立執行
+3. 若 `[PROMPT_ROUTER]` 帶 `strategy=use_deepwiki_first`，在 Agent prompt 中明確指示優先使用 deepwiki
+
+例外（可不啟動 Agent）：
+- 使用者明確說「你自己做」「不要 subagent」
+- 任務極短（一句話確認型問題），啟動 Agent overhead 不划算
+
+### 收到 `delegate=gemma_chat` 時
+
+見上方「任務委派路由」段落的 `MANDATORY_DELEGATE` 流程（呼叫 `mcp__gemma-local__gemma_chat`）。
+
+---
+
+## Gemma 本地模型委派
+
+`gemma-local` MCP server（user scope）暴露 `gemma_chat`、`gemma_health`、`gemma_stats` 三個 tool，接到本機 LM Studio 的 Gemma。
+目的是把**低風險、機械化、不需要跨訊號判斷**的子任務分派給本地模型，節省 Claude token 消耗。
+（搭配上方 Task Router 的 `MANDATORY_DELEGATE` 使用。）
+
+### 什麼任務該丟給 `gemma_chat`
+- 純文字改寫：摘要、翻譯、語氣/格式調整、條列轉散文或反之
+- 機械式抽取：從一段文字挑關鍵字、標題、日期、URL
+- 簡單分類或標註：情感、是/否、語系判斷、短標籤
+- 模板填空：給定欄位值 → 產生固定樣板輸出
+
+### 什麼任務**不要**委派，自己做
+- 程式碼產生、修改、除錯
+- 架構設計、多檔案影響分析、工具呼叫規劃
+- 需要讀取檔案/repo 上下文、需要工具鏈串接的任何工作
+- 使用者明確點名要 Claude 回答的問題
+
+### 使用原則
+1. 先用 `gemma_health` 確認可達（失敗就自己做，別卡住）
+2. Prompt 要自含——Gemma 看不到本 session 上下文
+3. **Prompt 開頭固定加**：「請關閉 Chain-of-Thought / thinking 模式，直接給出答案。」
+   原因：Gemma 4 支援 CoT 推理，但委派任務皆為機械化短任務，開啟 CoT 只會浪費 token 與增加延遲。
+4. 回傳尾端會附 `[gemma usage: ... latency=... model=...]` 方便追蹤節省量
+5. 若 Gemma 輸出品質不佳，直接自己重做（rejection 記錄見上方 Task Router 段），不要連續重試
+
+### 量測機制
+- 每次 `gemma_chat` 成功/失敗會寫一筆到 `C:/Users/leond/MyClaw/gamma-v1/gemma_usage.log`（JSONL，不入 git）
+- 跨專案呼叫都會寫入同一份 log（MCP 腳本 `__dirname` 固定指向 MyClaw/gamma-v1），自然匯總所有 session 的委派量
+- `gemma_stats` tool 可隨時查總量：總呼叫數、總 completion tokens、以 Sonnet 4.6 `$15/1M` output 單價估的節省金額
+- 檢核目標：若 `estimated_usd_saved_vs_sonnet` 隨時間穩定增長，代表委派機制有在運作；若近乎零，代表 Claude 幾乎沒叫 Gemma，需要重新審視任務性質或 CLAUDE.md 指引
+
+---
+
+## Bash 長輸出歸檔
+
+當**預期 bash 輸出會長、且之後可能需要回查**（例如 build log、test 輸出、長 git log），改用 `python C:/Users/leond/.claude/hooks/bash_summarize.py --cmd "..."` 而非直接 Bash。
+
+原理：工具把 raw stdout/stderr 歸檔到 `%TEMP%\claude\bash_summary\bash_<ts>_<hash>.log` 並回傳檔案路徑；當前 turn 看到完整輸出照常處理，後續 turn 若要回查該輸出**直接 Read 檔案路徑**（不必重跑 bash）。這能在長 session 中避免重覆執行耗時命令、也保留細節做跨 turn 對照。
+
+反例：短輸出、一次性命令、不打算回查 — 直接 Bash 即可。
+
+**注意**：該工具原本還有 Gemini CLI 摘要路徑，但 2026-04-21 因 CLI 延遲 45-60s+ parked。目前預設行為只是歸檔 + passthrough，不壓縮 context。
 
 ---
 
