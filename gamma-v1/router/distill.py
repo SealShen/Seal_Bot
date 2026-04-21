@@ -46,7 +46,7 @@ _load_dotenv()
 CONTENT_LOG = ROOT / "gemma_content.log"
 PLAYBOOK_PATH = ROOT / "gemma_playbook.md"
 GOOGLE_AI_BASE_URL = os.environ.get("GOOGLE_AI_BASE_URL", "http://localhost:1234/v1")
-LMSTUDIO_MODEL = os.environ.get("LMSTUDIO_MODEL", "local-model")
+GOOGLE_AI_MODEL = os.environ.get("GOOGLE_AI_MODEL", "local-model")
 GOOGLE_AI_API_KEY = os.environ.get("GOOGLE_AI_API_KEY", "")
 
 MAX_ENTRIES = 60               # cap entries fed to distillation
@@ -117,7 +117,7 @@ def build_corpus_prompt(entries):
 def call_gemma(prompt: str, system: str):
     url = GOOGLE_AI_BASE_URL.rstrip("/") + "/chat/completions"
     body = {
-        "model": LMSTUDIO_MODEL,
+        "model": GOOGLE_AI_MODEL,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": prompt},
