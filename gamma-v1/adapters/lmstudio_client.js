@@ -13,7 +13,7 @@
  *   until PT midnight. Both the hook classifier and this MCP adapter contribute
  *   to and consume this state so the cascade learns once per day.
  *
- * Primary config:  GOOGLE_AI_BASE_URL / GOOGLE_AI_API_KEY / LMSTUDIO_TIMEOUT (model names from cascade list)
+ * Primary config:  GOOGLE_AI_BASE_URL / GOOGLE_AI_API_KEY / GOOGLE_AI_TIMEOUT (model names from cascade list)
  * Fallback config: FALLBACK_BASE_URL / FALLBACK_MODEL / FALLBACK_API_KEY / FALLBACK_TIMEOUT
  *
  * Fallback triggers only on retryable errors (timeout / network / 429 / 5xx / empty content).
@@ -241,7 +241,7 @@ async function chat({
   messages.push({ role: 'user', content: prompt });
 
   const effectiveBase    = baseUrl || process.env.GOOGLE_AI_BASE_URL || DEFAULT_BASE_URL;
-  const effectiveTimeout = timeout || parseInt(process.env.LMSTUDIO_TIMEOUT || '0') || DEFAULT_TIMEOUT;
+  const effectiveTimeout = timeout || parseInt(process.env.GOOGLE_AI_TIMEOUT || '0') || DEFAULT_TIMEOUT;
   const apiKey           = process.env.GOOGLE_AI_API_KEY || null;
 
   const fallbackBase = process.env.FALLBACK_BASE_URL;
