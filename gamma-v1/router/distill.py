@@ -47,7 +47,7 @@ CONTENT_LOG = ROOT / "gemma_content.log"
 PLAYBOOK_PATH = ROOT / "gemma_playbook.md"
 GOOGLE_AI_BASE_URL = os.environ.get("GOOGLE_AI_BASE_URL", "http://localhost:1234/v1")
 LMSTUDIO_MODEL = os.environ.get("LMSTUDIO_MODEL", "local-model")
-LMSTUDIO_API_KEY = os.environ.get("LMSTUDIO_API_KEY", "")
+GOOGLE_AI_API_KEY = os.environ.get("GOOGLE_AI_API_KEY", "")
 
 MAX_ENTRIES = 60               # cap entries fed to distillation
 MAX_PROMPT_CHARS_PER_ENTRY = 300
@@ -128,8 +128,8 @@ def call_gemma(prompt: str, system: str):
     }
     data = json.dumps(body).encode("utf-8")
     headers = {"Content-Type": "application/json"}
-    if LMSTUDIO_API_KEY:
-        headers["Authorization"] = f"Bearer {LMSTUDIO_API_KEY}"
+    if GOOGLE_AI_API_KEY:
+        headers["Authorization"] = f"Bearer {GOOGLE_AI_API_KEY}"
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
     with urllib.request.urlopen(req, timeout=DISTILL_TIMEOUT_SECONDS) as r:
         resp = json.loads(r.read().decode("utf-8"))
