@@ -45,7 +45,7 @@ _load_dotenv()
 
 CONTENT_LOG = ROOT / "gemma_content.log"
 PLAYBOOK_PATH = ROOT / "gemma_playbook.md"
-LMSTUDIO_BASE_URL = os.environ.get("LMSTUDIO_BASE_URL", "http://localhost:1234/v1")
+GOOGLE_AI_BASE_URL = os.environ.get("GOOGLE_AI_BASE_URL", "http://localhost:1234/v1")
 LMSTUDIO_MODEL = os.environ.get("LMSTUDIO_MODEL", "local-model")
 LMSTUDIO_API_KEY = os.environ.get("LMSTUDIO_API_KEY", "")
 
@@ -115,7 +115,7 @@ def build_corpus_prompt(entries):
 
 
 def call_gemma(prompt: str, system: str):
-    url = LMSTUDIO_BASE_URL.rstrip("/") + "/chat/completions"
+    url = GOOGLE_AI_BASE_URL.rstrip("/") + "/chat/completions"
     body = {
         "model": LMSTUDIO_MODEL,
         "messages": [
