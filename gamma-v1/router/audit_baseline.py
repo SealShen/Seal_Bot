@@ -32,10 +32,10 @@ def _load_dotenv():
 
 _load_dotenv()
 
-BASE = os.environ.get("LMSTUDIO_BASE_URL", "http://localhost:1234/v1").rstrip("/")
-KEY = os.environ.get("LMSTUDIO_API_KEY", "")
+BASE = os.environ.get("GOOGLE_AI_BASE_URL", "http://localhost:1234/v1").rstrip("/")
+KEY = os.environ.get("GOOGLE_AI_API_KEY", "")
 # Classification uses the fast short-task model (Flash-Lite by default)
-MODEL = os.environ.get("LMSTUDIO_MODEL", "gemini-2.5-flash-lite")
+MODEL = os.environ.get("GOOGLE_AI_MODEL", "gemini-2.5-flash-lite")
 
 PROJECTS = Path.home() / ".claude" / "projects"
 OUT = ROOT / "audit_baseline.md"
