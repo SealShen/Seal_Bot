@@ -14,7 +14,7 @@
 const fs = require('fs');
 const path = require('path');
 
-// Load gamma-v1/.env into process.env at startup so FALLBACK_* and LMSTUDIO_* vars
+// Load gamma-v1/.env into process.env at startup so FALLBACK_* and GOOGLE_AI_* vars
 // are available regardless of how the MCP server was launched (direct / Claude Code).
 (function loadDotenv() {
   try {
