@@ -30,7 +30,7 @@ const args = process.argv.slice(2);
 if (args[0] === '--health') {
   lmstudio.healthCheck().then(ok => {
     if (ok) {
-      console.log('[OK] LM Studio is reachable at', process.env.LMSTUDIO_BASE_URL || 'http://localhost:1234/v1');
+      console.log('[OK] LM Studio is reachable at', process.env.GOOGLE_AI_BASE_URL || 'http://localhost:1234/v1');
       process.exit(0);
     } else {
       console.error('[FAIL] LM Studio is NOT reachable. Is it running with a model loaded?');
