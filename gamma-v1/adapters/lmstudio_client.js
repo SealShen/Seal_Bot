@@ -296,7 +296,7 @@ async function chat({
   let totalMs = 0;
 
   for (const layerModel of cascade) {
-    if (state.dead_layers.includes(layerModel)) {
+    if (isLayerDead(state, layerModel)) {
       attempts.push({ model: layerModel, skipped: 'sticky_dead' });
       continue;
     }
@@ -317,17 +317,21 @@ async function chat({
 
     attempts.push({ model: layerModel, ok: false, ms: res.latencyMs, error: res.error });
 
-    // 429 or 404 → mark layer dead for the rest of the PT day, try next
-    if (res.error && (/\b429\b|HTTP 429/i.test(res.error) || /HTTP 404/i.test(res.error))) {
-      markLayerDead(state, layerModel);
+    if (res.error && /\b429\b|HTTP 429/i.test(res.error)) {
+      markLayerDead(state, layerModel, 'quota');
       continue;
     }
-    // Non-retryable → break cascade (next layer won't fix misconfiguration)
+    if (res.error && /HTTP 404/i.test(res.error)) {
+      markLayerDead(state, layerModel, 'not_found');
+      continue;
+    }
+    // Non-retryable hard error — break cascade
     if (res.error && /HTTP 40[013]/i.test(res.error)) {
       hardError = res.error;
       break;
     }
-    // Other retryable errors (timeout/5xx/empty) → try next layer
+    // Transient (5xx/timeout/empty/network) — mark dead 20 min, try next layer
+    markLayerDead(state, layerModel, 'transient');
   }
 
   // Cascade exhausted — try local fallback (unless hard error encountered)
