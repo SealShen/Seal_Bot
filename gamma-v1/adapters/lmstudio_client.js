@@ -38,25 +38,28 @@ const DEFAULT_CASCADE = [
 
 const CASCADE_STATE_PATH = path.join(os.homedir(), '.claude', 'gemini-cascade-state.json');
 
-function todayPtStr() {
-  // PT = UTC-8; use millisecond shift then format YYYY-MM-DD
-  const now = new Date();
-  const pt = new Date(now.getTime() - 8 * 3600 * 1000);
-  return pt.toISOString().slice(0, 10);
-}
+// Dead-layer durations by error type
+const DEAD_MS = {
+  quota:     () => { const d = Math.floor((Date.now() - 8*3600000) / 86400000); return (d+1)*86400000 + 8*3600000; }, // PT midnight
+  not_found: () => Date.now() + 24 * 3600 * 1000,  // 24 h — misconfiguration
+  transient: () => Date.now() + 20 * 60 * 1000,    // 20 min — 5xx/timeout/empty
+};
 
 function loadCascadeState() {
-  const today = todayPtStr();
   try {
     const raw = fs.readFileSync(CASCADE_STATE_PATH, 'utf-8');
     const state = JSON.parse(raw);
-    if (state.date_pt !== today) {
-      return { date_pt: today, dead_layers: [] };
+    const now = Date.now();
+    // Migrate old format {date_pt, dead_layers: string[]}
+    if (Array.isArray(state.dead_layers) && state.dead_layers.length > 0 && typeof state.dead_layers[0] === 'string') {
+      const until = DEAD_MS.quota();
+      state.dead_layers = state.dead_layers.map(model => ({ model, until_ms: until }));
     }
     if (!Array.isArray(state.dead_layers)) state.dead_layers = [];
+    state.dead_layers = state.dead_layers.filter(e => e.until_ms > now);
     return state;
   } catch {
-    return { date_pt: today, dead_layers: [] };
+    return { dead_layers: [] };
   }
 }
 
@@ -68,11 +71,20 @@ function saveCascadeState(state) {
   } catch { /* logging failure must not block */ }
 }
 
-function markLayerDead(state, layer) {
-  if (!state.dead_layers.includes(layer)) {
-    state.dead_layers.push(layer);
-    saveCascadeState(state);
+function isLayerDead(state, layer) {
+  const e = state.dead_layers.find(x => x.model === layer);
+  return e ? e.until_ms > Date.now() : false;
+}
+
+function markLayerDead(state, layer, errorType = 'transient') {
+  const until_ms = (DEAD_MS[errorType] || DEAD_MS.transient)();
+  const existing = state.dead_layers.find(x => x.model === layer);
+  if (existing) {
+    existing.until_ms = Math.max(existing.until_ms, until_ms);
+  } else {
+    state.dead_layers.push({ model: layer, until_ms });
   }
+  saveCascadeState(state);
 }
 
 function getCascadeList() {
