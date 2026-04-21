@@ -12,9 +12,9 @@ cp .env.example .env
 
 `.env` 預設值：
 ```
-LMSTUDIO_BASE_URL=http://localhost:1234/v1
-LMSTUDIO_MODEL=local-model
-LMSTUDIO_TIMEOUT=60000
+GOOGLE_AI_BASE_URL=http://localhost:1234/v1
+GOOGLE_AI_MODEL=local-model
+GOOGLE_AI_TIMEOUT=60000
 CLAUDE_WORKING_DIR=C:\Users\<username>\MyClaw
 ```
 
