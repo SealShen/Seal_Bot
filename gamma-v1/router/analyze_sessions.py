@@ -37,12 +37,15 @@ def _load_dotenv():
 
 _load_dotenv()
 
-BASE = os.environ.get("LMSTUDIO_BASE_URL", "http://localhost:1234/v1")
-MODEL = os.environ.get("LMSTUDIO_MODEL", "local-model")
-KEY = os.environ.get("LMSTUDIO_API_KEY", "")
+BASE = os.environ.get("GOOGLE_AI_BASE_URL", "http://localhost:1234/v1")
+# ANALYZE_MODEL lets this CoT pipeline use a different (stronger) model than
+# short-task delegation via mcp_gemma_server.js, while sharing the same endpoint.
+MODEL = os.environ.get("ANALYZE_MODEL") or os.environ.get("GOOGLE_AI_MODEL", "local-model")
+KEY = os.environ.get("GOOGLE_AI_API_KEY", "")
 PROJECTS = Path.home() / ".claude" / "projects"
 OUT = PROJECTS / "C--Users-<username>-MyClaw" / "memory" / "_suggestions.md"
 PROGRESS_FILE = HERE / ".analyze_progress.json"
+ANCHORS_FILE = HERE / "analysis_anchors.md"
 
 DAYS = 14
 GEMMA_TIMEOUT = 500
@@ -226,16 +229,36 @@ def build_samples_text(stats):
     return "\n\n".join(blocks)
 
 
+def load_anchors():
+    """Load analysis_anchors.md — already-judged signals that should filter out
+    repeat false-positive suggestions. Returns '' if file missing or unreadable."""
+    if not ANCHORS_FILE.exists():
+        return ""
+    try:
+        content = ANCHORS_FILE.read_text(encoding="utf-8", errors="ignore")
+        content = re.sub(r"<!--.*?-->", "", content, flags=re.DOTALL).strip()
+        return content
+    except OSError:
+        return ""
+
+
 # ── Gemma call ─────────────────────────────────────────────────────────────────
+
+REASONING_EFFORT = os.environ.get("ANALYZE_REASONING_EFFORT", "medium")  # low/medium/high for Gemini thinking budget
+
 
 def call_gemma(prompt: str, max_tokens: int):
     url = BASE.rstrip("/") + "/chat/completions"
+    # For thinking models (Gemini 2.5 Flash), max_tokens is a TOTAL budget shared
+    # between reasoning tokens and the visible answer. Pad by 4× so thinking has
+    # room without starving the final answer, then cap thinking via reasoning_effort.
     body = {
         "model": MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.4,
-        "max_tokens": max_tokens,
+        "max_tokens": max_tokens * 4,
         "stream": False,
+        "reasoning_effort": REASONING_EFFORT,
     }
     headers = {"Content-Type": "application/json"}
     if KEY:
@@ -316,6 +339,9 @@ def main():
 
     stats_summary = build_stats_summary(stats)
     samples_text = build_samples_text(stats)
+    anchors_text = load_anchors()
+    if anchors_text:
+        print(f"      loaded anchors ({len(anchors_text)} chars) — filtering known-judged signals")
 
     if args.dry_run:
         print(stats_summary)
@@ -349,6 +375,18 @@ def main():
             if parts:
                 prior_ctx = "\n\n以下是前幾節已完成的摘要（供參考）：\n\n" + "\n\n".join(parts) + "\n\n"
 
+        anchors_block = ""
+        if anchors_text:
+            anchors_block = (
+                f"## 分析基線（Analysis Anchors）\n"
+                f"以下是使用者已判斷過的訊號。產出觀察與建議時**必須過濾掉這些**：\n"
+                f"- 標為「假警報」的統計異常視為預期現象，不列為問題、不建議改善\n"
+                f"- 標為「已納入 memory」的項目不再建議加入\n"
+                f"- 「架構備忘」是分析時要知道的前提，引用時要正確\n"
+                f"- 「保留觀察」項目只有在本次數據顯示惡化時才提，否則忽略\n\n"
+                f"{anchors_text}\n\n"
+            )
+
         prompt = (
             f"請關閉 Chain-of-Thought / thinking 模式，直接給出答案。不要在輸出中展示思考過程。\n\n"
             f"以下是使用者過去 {DAYS} 天 Claude Code 活動的統計與 session 取樣。\n\n"
@@ -356,6 +394,7 @@ def main():
             f"## Session 起始 prompt 取樣（共 {MAX_SAMPLES} 筆）\n"
             f"{samples_text}\n\n"
             f"{prior_ctx}"
+            f"{anchors_block}"
             f"---\n\n"
             f"只輸出以下這一個區段（不要重複前面的內容，不要輸出思考過程）：\n\n"
             f"{sec['prompt']}\n\n"
