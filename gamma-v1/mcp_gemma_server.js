@@ -149,6 +149,7 @@ async function handleToolCall(name, args) {
       prompt_tokens: res.usage?.prompt_tokens ?? null,
       completion_tokens: res.usage?.completion_tokens ?? null,
       playbook_used: playbook ? playbook.length : 0,
+      cascadeAttempts: res.cascadeAttempts || null,
     });
     appendContentLog({
       ts: Date.now(),
