@@ -133,7 +133,7 @@ async function handleToolCall(name, args) {
       temperature: typeof temperature === 'number' ? temperature : undefined,
     });
     if (!res.ok) {
-      appendUsageLog({ ts: Date.now(), ok: false, error: res.error, latencyMs: res.latencyMs, prompt_len: prompt.length });
+      appendUsageLog({ ts: Date.now(), ok: false, error: res.error, latencyMs: res.latencyMs, prompt_len: prompt.length, cascadeAttempts: res.cascadeAttempts || null });
       return { isError: true, content: [{ type: 'text', text: `Gemma error: ${res.error || 'unknown'}` }] };
     }
     appendUsageLog({
