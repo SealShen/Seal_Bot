@@ -45,7 +45,7 @@ _load_dotenv()
 IDLE_MIN_SECONDS = int(os.environ.get("IDLE_MIN_SECONDS", "1200"))  # 20 minutes
 CLAUDE_TRANSCRIPT_IDLE_SECONDS = int(os.environ.get("CLAUDE_TRANSCRIPT_IDLE_SECONDS", "1800"))  # 30 min
 GOOGLE_AI_BASE_URL = os.environ.get("GOOGLE_AI_BASE_URL", "http://localhost:1234/v1")
-LMSTUDIO_API_KEY = os.environ.get("LMSTUDIO_API_KEY", "")
+GOOGLE_AI_API_KEY = os.environ.get("GOOGLE_AI_API_KEY", "")
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 
 
@@ -109,8 +109,8 @@ def latest_transcript_age_seconds():
 def lm_studio_reachable() -> bool:
     url = GOOGLE_AI_BASE_URL.rstrip("/") + "/models"
     headers = {}
-    if LMSTUDIO_API_KEY:
-        headers["Authorization"] = f"Bearer {LMSTUDIO_API_KEY}"
+    if GOOGLE_AI_API_KEY:
+        headers["Authorization"] = f"Bearer {GOOGLE_AI_API_KEY}"
     try:
         req = urllib.request.Request(url, method="GET", headers=headers)
         with urllib.request.urlopen(req, timeout=5) as r:
