@@ -161,6 +161,9 @@ async function handleToolCall(name, args) {
       prompt_tokens: res.usage?.prompt_tokens ?? null,
       completion_tokens: res.usage?.completion_tokens ?? null,
     });
+    if (res.fellBackFrom && res.cascadeAttempts) {
+      log('cascade attempts:', JSON.stringify(res.cascadeAttempts));
+    }
     const fbMarker = res.fellBackFrom ? ' FALLBACK' : '';
     const footer = res.usage
       ? `\n\n---\n[gemma usage: in=${res.usage.prompt_tokens ?? '?'} out=${res.usage.completion_tokens ?? '?'} latency=${res.latencyMs}ms model=${res.model}${fbMarker}]`
