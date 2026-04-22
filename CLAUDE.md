@@ -148,7 +148,7 @@ Users/<username>        # 本機路徑中的系統帳號
 
 `gemma-local` MCP server（user scope）暴露 `gemma_chat`、`gemma_health`、`gemma_stats` 三個 tool，接到本機 LM Studio 的 Gemma。
 目的是把**低風險、機械化、不需要跨訊號判斷**的子任務分派給本地模型，節省 Claude token 消耗。
-（搭配上方 Task Router 的 `MANDATORY_DELEGATE` 使用。）
+（搭配 Prompt Router 的 `delegate=gemma_chat` 使用。）
 
 ### 什麼任務該丟給 `gemma_chat`
 - 純文字改寫：摘要、翻譯、語氣/格式調整、條列轉散文或反之
