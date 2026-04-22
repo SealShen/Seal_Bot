@@ -168,7 +168,7 @@ Users/<username>        # 本機路徑中的系統帳號
 3. **Prompt 開頭固定加**：「請關閉 Chain-of-Thought / thinking 模式，直接給出答案。」
    原因：Gemma 4 支援 CoT 推理，但委派任務皆為機械化短任務，開啟 CoT 只會浪費 token 與增加延遲。
 4. 回傳尾端會附 `[gemma usage: ... latency=... model=...]` 方便追蹤節省量
-5. 若 Gemma 輸出品質不佳，直接自己重做（rejection 記錄見上方 Task Router 段），不要連續重試
+5. 若 Gemma 輸出品質不佳，直接自己重做（rejection 記錄見上方 Prompt Router 段），不要連續重試
 
 ### 量測機制
 - 每次 `gemma_chat` 成功/失敗會寫一筆到 `C:/Users/<username>/MyClaw/gamma-v1/gemma_usage.log`（JSONL，不入 git）
