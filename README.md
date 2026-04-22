@@ -12,7 +12,6 @@
 ├── hooks/                       # Claude Code Hooks
 │   ├── cwd-guard.py             # UserPromptSubmit：工作目錄白名單檢查
 │   ├── auto-commit.py           # UserPromptSubmit：關鍵字觸發自動 git commit
-│   ├── route_model.py           # UserPromptSubmit：AgentOpt 模型路由分類器
 │   ├── bash-fail-guard.py       # PostToolUse(Bash)：連續失敗警告
 │   └── obs-mask-hook.js         # PostToolUse：超長工具結果外部化
 │
