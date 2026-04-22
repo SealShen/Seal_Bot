@@ -1,6 +1,6 @@
 # Seal_Bot — Claude Code 全域設定
 
-個人 Claude Code 環境的全域設定，包含：行為規範、Hooks、Slash Commands、模型路由腳本。
+個人 Claude Code 環境的全域設定，包含：行為規範、Hooks、Slash Commands。
 
 ## 結構
 
