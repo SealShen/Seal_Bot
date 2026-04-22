@@ -231,8 +231,7 @@ UserPromptSubmit hook `prompt_router.py` 取代原 AgentOpt 風格 model router�
     ▼
 UserPromptSubmit Hooks
   ├── cwd-guard.py        ← 白名單檢查（可能阻斷）
-  ├── auto-commit.py      ← 關鍵字偵測自動 commit
-  └── route_model.py      ← 注入 [MODEL_ROUTER] tier hint
+  └── prompt_router.py    ← 注入 [PROMPT_ROUTER] subagent/delegate hint
     │
     ▼
 CLAUDE.md 全域規則 + context
@@ -243,9 +242,9 @@ CLAUDE.md 全域規則 + context
     │
     ▼
 Claude LLM 決策
-  ├── 若 tier=haiku → Agent(model="haiku") 執行
-  ├── 若 tier=opus  → Agent(model="opus") 推理
-  └── 若 tier=sonnet → 直接執行
+  ├── 若 subagent=<type>   → Agent(subagent_type=<type>) 執行
+  ├── 若 delegate=gemma_chat → mcp__gemma-local__gemma_chat 處理
+  └── 否則                 → 直接執行
     │
     ▼
 Tool 呼叫
