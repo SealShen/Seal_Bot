@@ -123,7 +123,24 @@ Users/<username>        # 本機路徑中的系統帳號
 
 ### 收到 `delegate=gemma_chat` 時
 
-見上方「任務委派路由」段落的 `MANDATORY_DELEGATE` 流程（呼叫 `mcp__gemma-local__gemma_chat`）。
+**必須先呼叫 `mcp__gemma-local__gemma_chat` 工具處理**，不得直接自己輸出答案。流程：
+
+1. **先委派**：用 user prompt 原文（或重新組織後的清晰版本）呼叫 gemma_chat
+2. **驗收輸出**：評估 Gemma 回傳的品質。品質不佳的判準：
+   - 明顯偏離 user 要求（答非所問）
+   - 技術術語被誤改（例：`會員管理` 被改成 `使用者管理`）
+   - 遺漏 user 提供的關鍵資訊
+   - 格式錯誤無法使用
+3. **採用或拒絕**：
+   - **品質可接受** → 直接將 Gemma 輸出呈現給 user（可加簡短前言）
+   - **品質不佳** → 你自己重做，並寫一筆 rejection log 到 `~/.claude/routing-rejections.log`（JSONL）：
+     ```bash
+     python3 -c "import json,time; open('C:/Users/leond/.claude/routing-rejections.log','a',encoding='utf-8').write(json.dumps({'ts':time.strftime('%Y-%m-%dT%H:%M:%S%z'),'router_verdict':'<rewrite|summarize|doc_mechanical>','reject_reason':'<簡短描述>','claude_redid':True},ensure_ascii=False)+'\n')"
+     ```
+
+例外（可不委派）：user 明確說「你自己做」；gemma_chat 呼叫失敗（記錄後自己做）；classifier 誤判為純文字任務但實際需跨檔案理解（寫 rejection，reason=`mis-classified`）。
+
+檢討：每週跑 `python3 ~/.claude/hooks/routing_report.py` 查看委派率、rejection 率、省下 tokens；rejection 率連兩週 > 30% 需調 gate。
 
 ---
 
