@@ -90,51 +90,6 @@ Users/<username>        # 本機路徑中的系統帳號
 
 ---
 
-## 任務委派路由（Task Router）
-
-全域 UserPromptSubmit hook `~/.claude/hooks/task_router.py` 會在每次使用者輸入 prompt 時分類任務。若輸出 `[TASK_ROUTER] task=<cat> action=MANDATORY_DELEGATE target=gemma_chat`，表示此 prompt 為可委派的文字處理任務。
-
-### 強制委派語意
-
-收到 `action=MANDATORY_DELEGATE` 時，**必須先呼叫 `mcp__gemma-local__gemma_chat` 工具處理**，不得直接自己輸出答案。流程：
-
-1. **先委派**：用 user prompt 原文（或重新組織後的清晰版本）呼叫 gemma_chat
-2. **驗收輸出**：評估 Gemma 回傳的品質。品質不佳的判準：
-   - 明顯偏離 user 要求（答非所問）
-   - 技術術語被誤改（例：`會員管理` 被改成 `使用者管理`）
-   - 遺漏 user 提供的關鍵資訊
-   - 格式錯誤無法使用
-3. **採用或拒絕**：
-   - **品質可接受** → 直接將 Gemma 輸出呈現給 user（可加簡短前言）
-   - **品質不佳** → 你自己重做，並寫一筆 rejection log（見下）
-
-### Rejection 記錄（品質不佳時必寫）
-
-當你判定 Gemma 輸出需要拒絕並自己重做時，**必須**在最終回應末尾追加一筆 audit trail 到 `~/.claude/routing-rejections.log`（JSONL 格式）：
-
-```bash
-python3 -c "import json,time; open('C:/Users/<username>/.claude/routing-rejections.log','a',encoding='utf-8').write(json.dumps({'ts':time.strftime('%Y-%m-%dT%H:%M:%S%z'),'router_verdict':'<rewrite|summarize|doc_mechanical>','reject_reason':'<簡短描述為何不採用>','claude_redid':True},ensure_ascii=False)+'\n')"
-```
-
-填入的 `router_verdict` 對應 `[TASK_ROUTER]` 輸出的 `task=` 值。`reject_reason` 用一句話描述（例：`術語遺失`、`格式錯亂`、`答非所問`）。
-
-### 例外：只有以下情況可以不委派
-
-- 使用者明確說「不要用 gemma」「你自己做」「直接幫我寫」
-- gemma_chat 呼叫失敗（MCP 無法連線、API 錯誤）→ 記錄失敗原因後自己做
-- 任務實際需要讀取 repo / 跨檔案理解 / 程式碼判斷，但 classifier 誤判（此種情況要寫 rejection，reason=`mis-classified`）
-
-### 檢討機制
-
-每週跑 `python3 ~/.claude/hooks/routing_report.py` 查看：
-- 命中率、委派率、rejection 率
-- 高頻 rejection reason
-- 累積省下的 output tokens
-
-Rejection 率連續兩週 > 30% → gate 需要調整；< 10% → 強指令運作良好。
-
----
-
 ## Prompt Router subagent 指派
 
 全域 UserPromptSubmit hook `~/.claude/hooks/prompt_router.py` 可能在 user prompt 開頭附加：
