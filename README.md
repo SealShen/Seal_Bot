@@ -73,16 +73,6 @@ cp commands/*.md ~/.claude/commands/
 
 ## 主要功能說明
 
-### 模型路由（route_model.py）
-
-依 prompt 內容自動注入 `[MODEL_ROUTER] tier=X` 標籤，讓主 Claude 決定是否委派給 haiku/opus sub-agent：
-
-| Tier | 觸發條件 | 用途 |
-|------|----------|------|
-| `haiku` | 機械性操作（list/find/read/execute） | 省 token |
-| `opus` | 深度推理（架構設計/根本原因分析），且無寫入意圖 | 提升品質 |
-| `sonnet` | 預設 | 通用 |
-
 ### Observation Masking（obs-mask-hook.js）
 
 工具輸出超過 2000 字元時，自動寫入 `~/.claude/obs-cache/` 暫存檔，context 中只保留路徑摘要，大幅降低 context 用量。
