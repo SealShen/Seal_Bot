@@ -29,19 +29,39 @@
 - 若沒有對應的 MCP，請明確告知：「此服務尚未設定 MCP，請回到本機設定後再操作」
 
 ### 憑證保護
-- **禁止**讀取、列印或傳輸任何 .env、.pem、.key、.p12 等憑證檔案內容
-- **禁止**透過 process.env 或環境變數取得含有 KEY、TOKEN、SECRET、PASSWORD 的值並對外使用
-- **禁止**執行 printenv 或類似指令列出完整環境變數
+
+#### 存放：單一來源原則（2026-04-20 起）
+
+基於憑證架構稽核（`Netivism/Claude/output/security/mcp_audit_20260420_credential_storage.md`），所有 API Key / Token / Secret 一律走下列單一來源：
+
+- **Windows 使用者環境變數**（`HKCU\Environment`）為主要儲存
+- 僅當 MCP server 內建 dotenv loader 時，可以 `.env` 檔作單一來源（如 `MyClaw/my-lobster/.env`、`MyClaw/gamma-v1/.env`）
+
+**禁止在任何配置檔出現明文憑證：** `.mcp.json`、`~/.claude.json` 的 `mcpServers[*].env`、`settings.json`、`.gemini/extensions/**/gemini-extension.json`、以及 `*.config.*`、`settings.local.*`。
+
+**若配置檔必須宣告 env**（例如 Gemini CLI 自動 redact `*KEY*/*TOKEN*/*SECRET*/*PASSWORD*/*AUTH*/*CREDENTIAL*` pattern，需顯式宣告才會傳入 MCP 子程序）：
+- 僅允許 `${VAR_NAME}`（跨平台）或 `%VAR_NAME%`（Windows）引用形式
+- 實際值永遠留在 OS env 單一來源
+
+**對帳機制：** `C:/Users/leond/Netivism/Claude/scripts/check-keys.ps1` 掃描 OS env 存在性、`.mcp.json` / `~/.claude.json` / `gemini-extension.json` 明文殘留、`redmine-mcp/server.js` fallback 讀取殘留。修改 MCP / extension 配置後跑一次對帳。
+
+#### 接觸：禁止讀取、列印、對外使用
+
+- **禁止** 讀取、列印或傳輸任何 `.env`、`.pem`、`.key`、`.p12` 等憑證檔案內容
+- **禁止** 透過 `process.env` 或環境變數取得含 KEY、TOKEN、SECRET、PASSWORD 的值並對外使用
+- **禁止** 執行 `printenv` 或類似指令列出完整環境變數
 
 **此規則對所有執行主體生效**：主 session、Agent subagent（Explore/general-purpose/Plan 等）、MCP tool、hook 執行緒，一律適用。
 
-委派任務給子 agent 時：
-- Prompt 中**禁止出現** `API_KEY`、`TOKEN`、`SECRET`、`PASSWORD`、`CREDENTIAL`、`.env` 等字樣作為搜尋目標
+#### 委派任務給子 agent 時
+
+- Prompt 中 **禁止出現** `API_KEY`、`TOKEN`、`SECRET`、`PASSWORD`、`CREDENTIAL`、`.env` 等字樣作為搜尋目標
 - 要理解專案組態，只描述「找出主配置的結構與入口檔名」「回報使用了哪些外部服務（用服務名稱如 Gemini、Telegram）」，不要求提取欄位值
 - 若任務不可避免要碰設定檔，明確在 prompt 中註明：「**禁止讀取 .env 檔內容，只看結構與其他非機密檔**」
 
-意外讀到憑證時：
-- **立即停止摘要與回報**，不要在 summary 中引用該內容——即使部分遮罩也不可
+#### 意外讀到憑證
+
+- **立即停止摘要與回報**，不在 summary 中引用（即使部分遮罩也不可）
 - 告知使用者「讀到憑證，已中止」，由使用者決定下一步（輪換 / 清 transcript）
 
 ---
