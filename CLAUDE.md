@@ -43,7 +43,19 @@
 - 僅允許 `${VAR_NAME}`（跨平台）或 `%VAR_NAME%`（Windows）引用形式
 - 實際值永遠留在 OS env 單一來源
 
-**對帳機制：** `C:/Users/<username>/Netivism/Claude/scripts/check-keys.ps1` 掃描 OS env 存在性、`.mcp.json` / `~/.claude.json` / `gemini-extension.json` 明文殘留、`redmine-mcp/server.js` fallback 讀取殘留。修改 MCP / extension 配置後跑一次對帳。
+**對帳機制：** `C:/Users/<username>/Netivism/Claude/scripts/check-keys.ps1` 掃描 OS env 存在性，以及六個注入層的明文殘留：`.claude/settings.local.json`（最高優先）、`.mcp.json`、`~/.claude.json`、`redmine-mcp/server.js` fallback、MyClaw `.mcp.json`、`gemini-extension.json`。修改 MCP / extension 配置後跑一次對帳；Key 輪替前後各跑一次（見下方 SOP）。
+
+#### 輪替：Key Rotation SOP
+
+任何 Key / Token 需要輪替時，照下列順序執行，確保不殘留舊值：
+
+1. **跑 check-keys.ps1**（baseline）——確認目前哪些層有值
+2. **在服務端產新 key**（Redmine / Transifex 後台）——先產，不廢舊
+3. **更新 OS user env**（`HKCU\Environment`）——唯一要寫入的地方
+4. **清除其他層殘留**——check-keys.ps1 `[2/6]`～`[6/6]` 若有 `[FAIL]`，手動清除對應檔案的 env 區塊
+5. **重啟整個 VSCode**——`settings.local.json` 啟動時快取，重開 panel 無效，必須關整個 VSCode 再開
+6. **再跑 check-keys.ps1**——確認 OS env OK + 其他所有層空白
+7. **廢止舊 key**——確認新 key 可用（MCP 回 200）後才廢，避免輪替空窗
 
 #### 接觸：禁止讀取、列印、對外使用
 
