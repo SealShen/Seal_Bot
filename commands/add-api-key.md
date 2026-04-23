@@ -41,7 +41,7 @@
 ### {服務名稱} API（已核准）
 
 - **允許**使用 Bash + curl 呼叫 {服務名稱} REST API
-- Token 存於環境變數 `{ENV_VAR_NAME}`（設定於 `.claude/settings.local.json` env 區塊）
+- Token 存於 **Windows OS 使用者環境變數** `{ENV_VAR_NAME}`（單一來源，配置檔不得有明文）
 - 限制：{操作限制}
 - 稽核紀錄：`output/security/mcp_audit_{YYYYMMDD}.md`
 ```
