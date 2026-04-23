@@ -46,28 +46,36 @@
 - 稽核紀錄：`output/security/mcp_audit_{YYYYMMDD}.md`
 ```
 
-### Step 3：在 ~/.claude.json 加入 placeholder
+### Step 3：引導使用者設定 Windows OS 使用者環境變數
 
-讀取 `~/.claude.json`，在 `env` 區塊加入：
+**禁止**讀取、修改或顯示 `~/.claude.json`、`.mcp.json` 或任何含 `env` 區塊的配置檔。
+**禁止**要求使用者在對話中貼出 token 值。
 
-```json
-"{ENV_VAR_NAME}": "REPLACE_WITH_YOUR_TOKEN"
-```
-
-若 `env` 區塊不存在則新增。
-
-### Step 4：告知使用者
-
-輸出以下訊息：
+輸出以下指引給使用者：
 
 ```
-完成。請用文字編輯器開啟：
-  ~/.claude.json
+請設定 Windows OS 使用者環境變數，二擇一：
 
-將 "{ENV_VAR_NAME}" 的值從 "REPLACE_WITH_YOUR_TOKEN" 改為真實 Token。
+方式 A（GUI）：
+  開始 → 搜尋「編輯使用者的環境變數」
+  → 使用者變數區塊 → 新增 / 編輯 {ENV_VAR_NAME}
 
-存檔後重啟 Claude Code，再告訴我，我幫你測試連線。
+方式 B（PowerShell，避免歷史留痕）：
+  [Environment]::SetEnvironmentVariable('{ENV_VAR_NAME}', (Read-Host -AsSecureString | ConvertFrom-SecureString -AsPlainText), 'User')
+
+設定完成後，請完全關閉 Claude Code 並重新開啟，
+讓 MCP server process 重讀環境變數。
+重開完成後告訴我，我幫你測試連線。
 ```
+
+### Step 4：使用者重開 Claude Code 後，測試連線
+
+使用者回報完成 env 設定並重開後，以對應 MCP 工具執行一次測試呼叫。
+依回應分支處理：
+
+- **200 成功**：確認連線正常，歸檔稽核紀錄（Step 1 已產生）。
+- **401 / Invalid token**：提醒使用者檢查 env 值尾端是否有換行或空白（`server.js` 未 trim），需重新設定並重開。
+- **其他錯誤**：停止操作，回 `/security` 重新評估，不擅自繼續。
 
 ---
 
