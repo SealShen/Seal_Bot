@@ -26,30 +26,56 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-### 3. 建立 .env 設定檔
+### 3. 設定環境變數（Windows 使用者變數）
 
-複製範例並填入真實值：
+敏感欄位建議存放在 Windows 使用者環境變數，不寫在 `.env`。
+
+| 變數名稱 | 值 |
+|---|---|
+| `TELEGRAM_TOKEN` | BotFather 給的 Bot Token |
+| `MY_TELEGRAM_USER_ID` | 你的 Telegram User ID（數字） |
+| `TOTP_SECRET` | 首次啟動前**不必設**，見 Step 5 |
+
+設定方式：
+
+1. `Win + S` 搜尋「**編輯帳戶的環境變數**」並開啟
+2. 在「**使用者變數**」區塊點「**新增**」，填入名稱與值，確定
+3. 重複直到 `TELEGRAM_TOKEN` / `MY_TELEGRAM_USER_ID` 都設定好
+4. **關閉所有現有 terminal / VSCode**（環境變數更新後只有新啟動的 process 才讀得到）
+
+### 4. 建立 .env 設定檔
+
+複製範例並填入非敏感欄位：
 
 ```bat
 copy .env.example .env
 notepad .env
 ```
 
-`.env` 內容說明：
+`.env` 內只需填入工作目錄相關欄位：
 
 ```ini
-TELEGRAM_TOKEN=1234567890:ABCdef...     # BotFather 給你的 Token
-MY_TELEGRAM_USER_ID=987654321           # 你的 User ID（數字）
-CLAUDE_WORKING_DIR=C:\Users\你\Projects # Claude 執行時的工作目錄
+CLAUDE_WORKING_DIR=C:\Users\你\Projects   # Claude 執行時的工作目錄
+ALLOWED_DIRS=C:\Users\你\OtherProject     # 額外允許目錄（分號分隔，可空）
+DIR_LABELS=OtherProject                   # 對應的顯示標籤（分號分隔）
+BOT_OWNER_NAME=你的暱稱                   # TOTP QR code 顯示標籤
 ```
 
-### 4. 手動啟動測試
+> `dotenv` 預設 `override: false` — 若 `.env` 與環境變數同名欄位並存，**環境變數優先**。
 
-雙擊 `start_bot.bat`，或在終端機執行：
+### 5. 首次啟動 + TOTP 設定
 
-```bat
-start_bot.bat
-```
+1. 雙擊 `start_bot.bat` 首次啟動
+2. `bot.js` 偵測到無 `TOTP_SECRET`，會**自動產生並寫入 .env**
+3. 在 Telegram 傳 `/setup` → 用 Google Authenticator 掃描 QR code
+4. 傳 `/auth <6 位數碼>` 確認可用
+5. 打開 `.env`，把 `TOTP_SECRET=xxx` 那行的值複製 → 到 Windows 環境變數新增 `TOTP_SECRET`
+6. **刪除 `.env` 裡那行** `TOTP_SECRET=...`
+7. 重啟 Bot（關掉現有 Bot 程序、重跑 `start_bot.bat`）
+
+> ⚠️ **TOTP_SECRET 警示**：若之後不小心清掉 Windows 環境變數 `TOTP_SECRET`，下次 Bot 啟動會偵測到沒值、**自動產生新 secret 寫回 .env** → Google Authenticator 的舊驗證碼會失效，必須重跑 `/setup` 掃新 QR code。環境變數請妥善保管。
+
+### 6. 驗證
 
 Bot 啟動後，在 Telegram 傳 `/start` 確認連線成功。
 
@@ -114,6 +140,7 @@ Unregister-ScheduledTask -TaskName "ClaudeCodeTelegramBot" -Confirm:$false
 ## 安全說明
 
 - 白名單機制：Bot 只接受 `MY_TELEGRAM_USER_ID` 指定的使用者訊息，其他人的訊息一律靜默忽略
+- 敏感欄位（`TELEGRAM_TOKEN` / `MY_TELEGRAM_USER_ID` / `TOTP_SECRET`）建議存放在 Windows 使用者環境變數，不寫在 `.env`（.env 為明文檔、不加密）
 - 請勿將 `.env` 檔案上傳到 Git（預設應在 `.gitignore` 中排除）
 
 ---
