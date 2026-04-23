@@ -82,5 +82,7 @@
 ## 注意事項
 
 - **禁止**要求使用者在對話中貼出真實 Token
-- **禁止**讀取或顯示 `~/.claude.json` 中 Token 的實際值
+- **禁止**讀取或顯示任何配置檔（`~/.claude.json`、`.mcp.json`、`.env` 等）中 Token 的實際值
+- **禁止**讀取 / 解析 / 列印 Windows OS 使用者環境變數的 value
+- **對帳請呼叫 `check-keys.ps1`**（只列 key 名，不列 value）
 - 每個新服務獨立一份稽核紀錄，不合併
