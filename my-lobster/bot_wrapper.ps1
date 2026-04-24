@@ -1,4 +1,4 @@
-Set-Location 'c:\Users\<username>\MyClaw\my-lobster'
+Set-Location (Split-Path $PSCommandPath)
 Write-Host '[wrapper] Starting bot.js (no-admin path)...' -ForegroundColor Cyan
 while ($true) {
   $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
