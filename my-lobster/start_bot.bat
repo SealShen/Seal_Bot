@@ -19,9 +19,11 @@ if not exist "node_modules" (
     npm install
 )
 
-echo Starting Claude Code Telegram Bot...
-node bot.js
+echo Starting Claude Code Telegram Bot (with auto-restart, log -^> bot.log)...
 
-echo.
-echo Bot stopped.
-pause
+:loop
+echo [%date% %time%] --- Bot starting --- >> bot.log
+node bot.js >> bot.log 2>&1
+echo [%date% %time%] --- Bot exited with code %errorlevel%, restarting in 5s --- >> bot.log
+timeout /t 5 /nobreak >nul
+goto loop
