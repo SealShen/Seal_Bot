@@ -236,6 +236,7 @@ async function runClaude(prompt, chatId, forceNew = false, imagePaths = []) {
 
   const env = { ...process.env, CLAUDE_FROM_BOT: '1', CLAUDE_BOT_CHATID: String(chatId) };
   delete env.CLAUDECODE;
+  delete env.ANTHROPIC_API_KEY; // 訂閱用戶走 OAuth，無效的 API key 會導致 "Invalid API key" 錯誤
 
   const proc = spawn('claude', args, {
     cwd: workingDir,
@@ -1358,7 +1359,16 @@ bot.on('message', async (msg) => {
 // ── Error handling ────────────────────────────────────────────────────────────
 bot.on('polling_error', (err) => console.error('Polling error:', err.message));
 
-console.log(`Bot 啟動，工作目錄：${workingDir}`);
+// 全域未捕獲錯誤：unhandledRejection 不退出，uncaughtException 退出讓 wrapper 重啟
+process.on('unhandledRejection', (reason, promise) => {
+  console.error(`[${new Date().toISOString()}] [unhandledRejection]`, reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error(`[${new Date().toISOString()}] [uncaughtException]`, err);
+  setTimeout(() => process.exit(1), 500);
+});
+
+console.log(`[${new Date().toISOString()}] Bot 啟動，工作目錄：${workingDir}`);
 console.log(`允許目錄：${ALLOWED_DIRS.join(', ')}`);
 
 // 啟動時通知 owner（重啟後提示驗證）
