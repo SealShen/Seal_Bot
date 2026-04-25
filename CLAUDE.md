@@ -37,13 +37,21 @@
 - **Windows 使用者環境變數**（`HKCU\Environment`）為主要儲存
 - 僅當 MCP server 內建 dotenv loader 時，可以 `.env` 檔作單一來源（如 `MyClaw/my-lobster/.env`、`MyClaw/gamma-v1/.env`）
 
-**禁止在任何配置檔出現明文憑證：** `.mcp.json`、`~/.claude.json` 的 `mcpServers[*].env`、`settings.json`、`.gemini/extensions/**/gemini-extension.json`、以及 `*.config.*`、`settings.local.*`。
+**禁止在任何配置檔出現明文憑證：** `.mcp.json`、`~/.claude.json` 的 `mcpServers[*].env`、`settings.json`、`.gemini/extensions/**/gemini-extension.json`、`~/.codex/config.toml` 的 `[mcp_servers.*].env`、以及 `*.config.*`、`settings.local.*`。
 
-**若配置檔必須宣告 env**（例如 Gemini CLI 自動 redact `*KEY*/*TOKEN*/*SECRET*/*PASSWORD*/*AUTH*/*CREDENTIAL*` pattern，需顯式宣告才會傳入 MCP 子程序）：
-- 僅允許 `${VAR_NAME}`（跨平台）或 `%VAR_NAME%`（Windows）引用形式
+**若配置檔必須宣告 env**（多 host 都自動 redact 機敏 pattern，需顯式宣告才會傳入 MCP 子程序）：
+
+| Host | Redact pattern | 引用語法 | 配置檔 |
+|---|---|---|---|
+| Gemini CLI | `*KEY*/*TOKEN*/*SECRET*/*PASSWORD*/*AUTH*/*CREDENTIAL*` | `${VAR_NAME}` 或 `%VAR_NAME%` | `gemini-extension.json` 的 `env` 區塊 |
+| Codex CLI 0.125+ | `*KEY*/*SECRET*/*TOKEN*` | `env_vars = ["VAR_NAME", ...]` 名單形式 | `~/.codex/config.toml` 的 `[mcp_servers.NAME]` 區塊 |
+
 - 實際值永遠留在 OS env 單一來源
+- **Codex CLI 禁用 `codex mcp add --env KEY=VALUE`**（會 shell 展開後**明文**寫進 `config.toml`），所有 stdio MCP 憑證注入一律走 `env_vars` 名單；`codex mcp add` 後手動編輯 `config.toml` 補 `env_vars` 陣列即可
 
-**對帳機制：** `C:/Users/leond/Netivism/Claude/scripts/check-keys.ps1` 掃描 OS env 存在性，以及六個注入層的明文殘留：`.claude/settings.local.json`（最高優先）、`.mcp.json`、`~/.claude.json`、`redmine-mcp/server.js` fallback、MyClaw `.mcp.json`、`gemini-extension.json`。修改 MCP / extension 配置後跑一次對帳；Key 輪替前後各跑一次（見下方 SOP）。
+**對帳機制：** `C:/Users/leond/Netivism/Claude/scripts/check-keys.ps1` 掃描 OS env 存在性，以及七個注入層的明文殘留：`.claude/settings.local.json`（最高優先）、`.mcp.json`、`~/.claude.json`、`redmine-mcp/server.js` fallback、MyClaw `.mcp.json`、`gemini-extension.json`、`~/.codex/config.toml`。修改 MCP / extension 配置後跑一次對帳；Key 輪替前後各跑一次（見下方 SOP）。
+
+> **TODO**：`check-keys.ps1` 目前只到 [6/6] 段，第 7 段（Codex CLI `~/.codex/config.toml` 掃描）尚待實作 — 已在 [mcp_audit_20260425_codex_cli_mcp.md](file:///C:/Users/leond/Netivism/Claude/output/security/mcp_audit_20260425_codex_cli_mcp.md) 列追蹤項。
 
 #### 輪替：Key Rotation SOP
 
