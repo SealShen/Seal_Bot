@@ -131,11 +131,23 @@ Users/<username>        # 本機路徑中的系統帳號
 [PROMPT_ROUTER] delegate=gemma_chat source=<s>
 ```
 
-### 收到 `subagent=<type>` 時（強制）
+### 收到 `subagent=<type>` 時（參考）
 
-**必須呼叫 `Agent` tool**，`subagent_type` 設為對應類型，不得自己直接回答。
+Router hint **僅供參考**，不強制 type match。自行讀任務描述判斷是否開 subagent、用哪一型。
 
-| subagent=         | 使用時機                              |
+**根據**：2026-04-25 合規回測，router type match 僅 0-33%，但 Claude 自選的型別通常更合適；以工具呼叫數為基礎的 threshold 也有循環矛盾（正確開 subagent 會讓 main context 工具數變低，無法當訊號）。所以判斷權留給 LLM 讀任務描述，hint 僅當參考。
+
+**何時主動開 subagent**（保護 main context、節省 token）：
+- 需要探索未知的多個模組/檔案（搜尋範圍不明確）
+- 多個獨立子問題可平行處理
+- 預期產生大量工具呼叫或長輸出
+- 連續失敗 ≥ 2 次的除錯（用 `root_cause`）
+
+反之，任務描述清晰、範圍明確、輸出短的請求，直接在主對話處理。
+
+可用 subagent 型別參考：
+
+| subagent_type    | 使用時機                              |
 |------------------|--------------------------------------|
 | `lookup`         | 定位檔案、函式、issue、wiki 頁         |
 | `research`       | 跨模組調查、架構理解                  |
@@ -144,14 +156,10 @@ Users/<username>        # 本機路徑中的系統帳號
 | `file_rewrite`   | 單一檔案格式或結構調整                |
 | `root_cause`     | 連續失敗診斷、環境問題定位             |
 
-呼叫規則：
+呼叫規則（決定 spawn 時）：
 1. Agent prompt 以 user 原始 prompt（去掉 `[PROMPT_ROUTER]` 前綴）為核心
 2. 加入足夠的 session 上下文（相關路徑、已知資訊）讓 subagent 可獨立執行
 3. 若 `[PROMPT_ROUTER]` 帶 `strategy=use_deepwiki_first`，在 Agent prompt 中明確指示優先使用 deepwiki
-
-例外（可不啟動 Agent）：
-- 使用者明確說「你自己做」「不要 subagent」
-- 任務極短（一句話確認型問題），啟動 Agent overhead 不划算
 
 ### 收到 `delegate=gemma_chat` 時
 
