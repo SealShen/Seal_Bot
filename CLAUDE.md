@@ -116,5 +116,34 @@ Agent({
 
 ### 為什麼要強制
 - 主 session 對「委派成本」短視——直接答的 context 膨脹是延遲成本，不會被即時感知
-- hook 已在 prompt_router_tracker（roadmap Fix C 待落地）追蹤遵從率，靜默跳過會被計入違規率
+- hook 已在 `routing_report.py` 整合 compliance 段追蹤遵從率，靜默跳過會被計入違規率（跑 `python ~/.claude/hooks/routing_report.py --days 14`）
 - 委派把答案壓成摘要回主 session，長對話下來省顯著 context
+
+---
+
+## Worktree 隔離 Gate（D 策略）
+
+當 prompt_router 偵測到實質改動意圖（route ∈ `{complex_rewrite, file_rewrite, root_cause}`），會額外印：
+
+```
+worktree_hint=ask
+→ Worktree gate: before any Edit/Write/Bash that mutates files, ask 「要在 git worktree 隔離嗎？(y/n/skip)」
+```
+
+### 主 session 看到 `worktree_hint=ask` 時的行為
+
+1. **動 Edit/Write/Bash 改檔之前**先問使用者：「要在 git worktree 隔離這次改動嗎？(y/n/skip)」
+   - `y` → 用 `EnterWorktree` tool 開隔離環境，在裡面動手；完成後 `ExitWorktree` 並提醒使用者 review/merge
+   - `n` → 在主分支動手（既有行為）
+   - `skip` → 本次 conversation 之內不再問，直接動手；**不寫 user memory，重啟對話會重新詢問**
+2. **何時可以省略詢問**：
+   - 純診斷／read-only 任務（沒打算動 Edit/Write）
+   - 同一 conversation 內使用者已說過 skip
+   - 任務是修文件 typo / 註解這種小到無法回滾的等級（自行判斷，但保守做法仍應問）
+3. **Branch 命名建議**：`claude-experiment/<topic>`（worktree 內的分支）
+4. **Merge 策略建議**：squash（保持主分支線性）
+
+### 為什麼要 ask 而不是自動隔離
+- 隔離有 overhead（建 worktree、checkout、後續 merge）；trivial 改動不值得
+- 使用者最知道哪些改動高風險（例如 bot_wrapper 等 critical path）
+- 「ask 一次本對話內記住」是 friction 跟自由的平衡點
