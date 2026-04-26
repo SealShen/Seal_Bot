@@ -98,6 +98,55 @@ remote = remote_match.group(1) if remote_match else 'origin'
 if remote.startswith('-'):
     remote = 'origin'
 
+# ── Layer 1: review marker 檢查 ────────────────────────────────────────────────
+# 強制流程：所有 unpushed commits 必須有 "Reviewed-by:" trailer 才能 push。
+# Grandfather: 既存 "Co-Authored-By: Claude" commits 視為已 review（過渡兼容）。
+# Bypass: 在 push 指令末尾加 # noreview。
+NOREVIEW = '# noreview' in command
+
+REVIEW_TRAILER = re.compile(r'^Reviewed-by:\s*\S+', re.MULTILINE)
+GRANDFATHER_TRAILER = re.compile(r'^Co-Authored-By:.*Claude', re.MULTILINE | re.IGNORECASE)
+
+def _get_unpushed_commits():
+    # 用 \x1f / \x1e 當分隔避免 commit message 內字元干擾
+    out, _ = run(['git', 'log', f'{remote}/HEAD..HEAD', '--format=%H%x1f%B%x1e'])
+    if not out:
+        # Fallback：新 branch 或無 upstream
+        out, _ = run(['git', 'log', '-1', '--format=%H%x1f%B%x1e'])
+    commits = []
+    for entry in (out or '').split('\x1e'):
+        entry = entry.strip()
+        if not entry or '\x1f' not in entry:
+            continue
+        sha, msg = entry.split('\x1f', 1)
+        commits.append((sha.strip(), msg))
+    return commits
+
+if not NOREVIEW:
+    unreviewed = []
+    for sha, msg in _get_unpushed_commits():
+        if REVIEW_TRAILER.search(msg) or GRANDFATHER_TRAILER.search(msg):
+            continue
+        first_line = (msg.strip().splitlines() or ['(empty)'])[0][:60]
+        unreviewed.append(f'{sha[:8]} "{first_line}"')
+    if unreviewed:
+        msg_lines = [
+            '[git-push-guard] BLOCKED: 以下 commits 未經 review。',
+            '',
+            'Unreviewed commits:',
+        ]
+        msg_lines += [f'  - {x}' for x in unreviewed[:10]]
+        msg_lines += [
+            '',
+            'Action（任選一）：',
+            '  1. 跑 /review-flow → 自動 review→修改→測試→commit-with-trailer→push',
+            '  2. 人工確認後加 trailer：',
+            '     git commit --amend --no-edit --trailer "Reviewed-by: human"',
+            '  3. 逃生艙：在 push 指令末尾加 # noreview',
+        ]
+        print('\n'.join(msg_lines))
+        sys.exit(2)
+
 # 取得尚未推送到 remote 的 commits 包含的檔案內容
 diff_out, _ = run(['git', 'diff', f'{remote}/HEAD..HEAD'])
 if not diff_out:
