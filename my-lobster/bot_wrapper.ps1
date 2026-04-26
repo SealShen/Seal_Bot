@@ -1,16 +1,17 @@
 Set-Location (Split-Path $PSCommandPath)
 $ErrorActionPreference = 'Continue'
 trap {
-  $tt = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-  Add-Content -Path 'bot_wrapper.death.log' -Value "[$tt] TRAP pid=$PID msg=$($_.Exception.Message)" -Encoding UTF8
-  continue
+  $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+  Add-Content -Path 'bot_wrapper.death.log' -Value "[$ts] TRAP pid=$PID msg=$($_.Exception.Message)" -Encoding UTF8
+  Start-Sleep -Seconds 5
+  exit 1
 }
 Register-EngineEvent PowerShell.Exiting -Action {
-  $tt = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-  Add-Content -Path 'bot_wrapper.death.log' -Value "[$tt] EXITING pid=$PID last_exit=$global:LASTEXITCODE" -Encoding UTF8
+  $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+  Add-Content -Path 'bot_wrapper.death.log' -Value "[$ts] EXITING pid=$PID" -Encoding UTF8
 } | Out-Null
-$startTs = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-Add-Content -Path 'bot_wrapper.death.log' -Value "[$startTs] WRAPPER_START pid=$PID host=$env:COMPUTERNAME" -Encoding UTF8
+$ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+Add-Content -Path 'bot_wrapper.death.log' -Value "[$ts] WRAPPER_START pid=$PID host=$env:COMPUTERNAME" -Encoding UTF8
 Write-Host '[wrapper] Starting bot.js (no-admin path)...' -ForegroundColor Cyan
 while ($true) {
   $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
