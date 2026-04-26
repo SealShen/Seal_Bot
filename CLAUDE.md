@@ -84,3 +84,36 @@ Agent({
 - 曾短暫建過 `gamma-v1/haiku-search/`（MCP server + Anthropic SDK），但那個架構的省錢算法假設 Opus API 付費單價 $75/1M，**對訂閱用戶不適用**——反而是「花 API 錢省訂閱配額」方向錯誤
 - 已整包刪除；`.mcp.json` 不要再加回 `haiku-search` entry
 - 若將來真的開 Anthropic API 付費帳戶才重新評估
+
+---
+
+## Prompt Router 委派規則（強制）
+
+`UserPromptSubmit` hook 會用 Gemma 對 user prompt 做意圖分類，輸出形如：
+
+```
+[PROMPT_ROUTER] subagent=<name> source=gemini:gemma-4-31b-it
+```
+
+**這是指令，不是建議。** 預設用 `Agent(subagent_type="<name>", ...)` 委派，**不要在主 session 直接處理**。
+
+### 已註冊的自訂 subagent（`~/.claude/agents/*.md`）
+- `lookup` — 純檢索（找檔案、找 symbol、列 issue）
+- `research` — 多工具研究（codebase + deepwiki + redmine 三向）
+- `think_deeply` — 設計討論／架構推理／取捨分析
+- `complex_rewrite` — 複雜跨檔改寫
+- `file_rewrite` — 單檔 atomic 改寫
+- `root_cause` — 錯誤恢復與根因分析
+
+### 跳過委派的條件（必須在回覆首句明寫原因）
+只在以下情況可跳過：
+1. **對話連續性關鍵**：多輪設計討論中途，subagent 看不到前文會掉訊息
+2. **任務 trivial**：1-2 步驟可完成，委派 overhead 大於收益
+3. **使用者明確點名要主 session 回答**
+
+跳過時**回覆首句必須寫明**例如：「inline 處理因為對話連續性」。靜默跳過 = 違規。
+
+### 為什麼要強制
+- 主 session 對「委派成本」短視——直接答的 context 膨脹是延遲成本，不會被即時感知
+- hook 已在 prompt_router_tracker（roadmap Fix C 待落地）追蹤遵從率，靜默跳過會被計入違規率
+- 委派把答案壓成摘要回主 session，長對話下來省顯著 context
