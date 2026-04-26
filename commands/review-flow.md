@@ -97,11 +97,12 @@ git log @{u}..HEAD --oneline
 git add <changed files>
 git commit -m "<conventional title>" \
   -m "<body：簡述 fixes 與 why>" \
-  -m "Reviewed-by: claude-opus-4-7" \
-  -m "Tested-by: manual-checklist" \
-  -m "Test-status: <passed|skipped>" \
-  -m "Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
+  --trailer "Reviewed-by: claude-opus-4-7" \
+  --trailer "Tested-by: manual-checklist" \
+  --trailer "Test-status: <passed|skipped>" \
+  --trailer "Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 ```
+（用 `--trailer` 而非多個 `-m`，避免每個 trailer 各自成段違反 git trailer 規範）
 
 Commit message body 應該總結 review 重點（這就是「review 重點記錄到 commit」）。
 
