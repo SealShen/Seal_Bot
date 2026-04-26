@@ -92,10 +92,11 @@ Agent({
 `UserPromptSubmit` hook 會用 Gemma 對 user prompt 做意圖分類，輸出形如：
 
 ```
-[PROMPT_ROUTER] subagent=<name> source=gemini:gemma-4-31b-it
+[PROMPT_ROUTER DIRECTIVE] subagent=<name> classifier=gemini:gemma-4-31b-it (advisory)
+→ Default action: Agent(subagent_type="<name>", ...). Override only if ... — state reason first sentence.
 ```
 
-**這是指令，不是建議。** 預設用 `Agent(subagent_type="<name>", ...)` 委派，**不要在主 session 直接處理**。
+**這是指令，不是建議。** 預設用 `Agent(subagent_type="<name>", ...)` 委派，**不要在主 session 直接處理**。`classifier` 標 `(advisory)` 是因為意圖判斷會錯——但 routing 動作本身不是 advisory，看到 hint 就要照做或公開說明為何不照做。
 
 ### 已註冊的自訂 subagent（`~/.claude/agents/*.md`）
 - `lookup` — 純檢索（找檔案、找 symbol、列 issue）
