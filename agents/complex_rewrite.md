@@ -1,6 +1,6 @@
 ---
 name: complex_rewrite
-description: 複雜改寫（含 #issue / 模板 / memory / wiki / AC-TC 對照 / 跨檔）。由 prompt_router hint `subagent=complex_rewrite` 觸發。回改寫成果 + 對照記錄。適合規格文件、AC/TC 重排、wiki 頁改寫。
+description: Use WHEN: rewrite/edit task that references a Redmine issue (#12345), template, memory file, wiki page, AC/TC spec, or spans multiple files. Needs BOTH rewrite intent AND a complex reference. NOT for: single-file edits with no external reference (use file_rewrite), pure research (use research).
 tools: Read, Grep, Glob, Edit, Write, mcp__redmine__get_redmine_issue, mcp__redmine__get_redmine_wiki, mcp__redmine__search_wiki_history
 model: sonnet
 isolation: worktree
