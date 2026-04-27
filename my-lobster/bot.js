@@ -718,7 +718,7 @@ bot.on('callback_query', async (query) => {
       }
       gemmaMode = false;
       gemmaHistory = [];
-      const modelMap = { haiku: 'haiku', sonnet: 'claude-sonnet-4-6', opus: 'claude-opus-4-7' };
+      const modelMap = { haiku: 'haiku', sonnet: 'claude-sonnet-4-6', opus: 'claude-opus-4-6' };
       claudeModel = modelMap[choice] ?? choice;
       const label = choice === 'haiku' ? '⚡ Haiku' : choice === 'sonnet' ? '🎵 Sonnet（預設）' : '🏛 Opus';
       bot.editMessageText(
