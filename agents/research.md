@@ -1,6 +1,6 @@
 ---
 name: research
-description: 多工具研究（codebase + 架構 + deepwiki + security audit）。由 prompt_router hint `subagent=research` 觸發，常帶 `strategy=use_deepwiki_first`。回研究摘要 + 路徑 + 結論。適合跨模組調查、架構理解、安全審計。
+description: Use WHEN: multi-source investigation spanning codebase + external docs — cross-module architecture, OSS codebase questions (netiCRM/CiviCRM), security audit, or any research needing DeepWiki + local grep together. NOT for: simple file lookup (use lookup), open-ended discussion (use think_deeply), direct edits.
 tools: Read, Grep, Glob, WebFetch, WebSearch, mcp__deepwiki__ask_question, mcp__deepwiki__read_wiki_structure, mcp__deepwiki__read_wiki_contents, mcp__redmine__get_redmine_issue, mcp__redmine__list_redmine_issues, mcp__redmine__get_redmine_wiki
 model: sonnet
 ---
