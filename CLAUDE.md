@@ -168,8 +168,6 @@ Users/<username>        # 本機路徑中的系統帳號
 - hook 已在 `routing_report.py` 整合 compliance 段追蹤遵從率，靜默跳過會被計入違規率（跑 `python ~/.claude/hooks/routing_report.py --days 14`）
 - 委派把答案壓成摘要回主 session，長對話下來省顯著 context
 
-檢討：每週跑 `python3 ~/.claude/hooks/routing_report.py` 查看委派率、rejection 率、省下 tokens；rejection 率連兩週 > 30% 需調 gate。
-
 ### 收到 `delegate=gemma_chat` 時
 
 **必須先呼叫 `mcp__gemma-local__gemma_chat` 工具處理**，不得直接自己輸出答案。流程：
