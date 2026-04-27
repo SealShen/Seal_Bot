@@ -105,7 +105,6 @@ if remote.startswith('-'):
 NOREVIEW = '# noreview' in command
 
 REVIEW_TRAILER = re.compile(r'^Reviewed-by:\s*\S+', re.MULTILINE)
-GRANDFATHER_TRAILER = re.compile(r'^Co-Authored-By:.*Claude', re.MULTILINE | re.IGNORECASE)
 
 def _get_unpushed_commits():
     # 用 \x1f / \x1e 當分隔避免 commit message 內字元干擾
@@ -125,7 +124,7 @@ def _get_unpushed_commits():
 if not NOREVIEW:
     unreviewed = []
     for sha, msg in _get_unpushed_commits():
-        if REVIEW_TRAILER.search(msg) or GRANDFATHER_TRAILER.search(msg):
+        if REVIEW_TRAILER.search(msg):
             continue
         first_line = (msg.strip().splitlines() or ['(empty)'])[0][:60]
         unreviewed.append(f'{sha[:8]} "{first_line}"')
