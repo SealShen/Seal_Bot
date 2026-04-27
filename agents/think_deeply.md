@@ -2,7 +2,7 @@
 name: think_deeply
 description: 設計討論與架構推理（怎麼辦／想想／評估／構思／討論）。由 prompt_router hint `subagent=think_deeply` 觸發。回思考摘要 + 推理路徑。適合取捨分析、架構決策、規格討論。
 tools: Read, Grep, Glob, mcp__deepwiki__ask_question
-model: opus
+model: claude-opus-4-6
 ---
 
 # think_deeply — 設計思考 subagent
