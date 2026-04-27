@@ -132,42 +132,43 @@ Users/<username>        # 本機路徑中的系統帳號
 
 ## Prompt Router subagent 指派
 
-全域 UserPromptSubmit hook `~/.claude/hooks/prompt_router.py` 可能在 user prompt 開頭附加：
+全域 UserPromptSubmit hook `~/.claude/hooks/prompt_router.py` 會用 Gemma 對 user prompt 做意圖分類，輸出形如：
 
 ```
-[PROMPT_ROUTER] subagent=<type> source=<s>
-[PROMPT_ROUTER] delegate=gemma_chat source=<s>
+[PROMPT_ROUTER DIRECTIVE] subagent=<name> classifier=gemini:gemma-4-31b-it (advisory)
+→ Default action: Agent(subagent_type="<name>", ...). Override only if ... — state reason first sentence.
 ```
 
-### 收到 `subagent=<type>` 時（參考）
+**這是指令，不是建議。** 預設用 `Agent(subagent_type="<name>", ...)` 委派，**不要在主 session 直接處理**。`classifier` 標 `(advisory)` 是因為意圖判斷會錯——但 routing 動作本身不是 advisory，看到 hint 就要照做或公開說明為何不照做。
 
-Router hint **僅供參考**，不強制 type match。自行讀任務描述判斷是否開 subagent、用哪一型。
+### 已註冊的自訂 subagent（`~/.claude/agents/*.md`）
+- `lookup` — 純檢索（找檔案、找 symbol、列 issue）
+- `research` — 多工具研究（codebase + deepwiki + redmine 三向）
+- `think_deeply` — 設計討論／架構推理／取捨分析
+- `complex_rewrite` — 複雜跨檔改寫
+- `file_rewrite` — 單檔 atomic 改寫
+- `root_cause` — 錯誤恢復與根因分析
 
-**根據**：2026-04-25 合規回測，router type match 僅 0-33%，但 Claude 自選的型別通常更合適；以工具呼叫數為基礎的 threshold 也有循環矛盾（正確開 subagent 會讓 main context 工具數變低，無法當訊號）。所以判斷權留給 LLM 讀任務描述，hint 僅當參考。
+### 跳過委派的條件（必須在回覆首句明寫原因）
+只在以下情況可跳過：
+1. **對話連續性關鍵**：同一設計討論已進行 **≥ 3 輪以上**，subagent 看不到前文會掉關鍵 context。前 1-2 輪**不適用**此例外。
+2. **任務 trivial**：1-2 步驟可完成，委派 overhead 大於收益。**`think_deeply` 不算 trivial，即使問題很短** — think_deeply subagent 跑 **Opus**（高推理品質），跳過等於主動降級到 Sonnet inline，不符合 trivial 定義。
+3. **使用者明確點名要主 session 回答**
 
-**何時主動開 subagent**（保護 main context、節省 token）：
-- 需要探索未知的多個模組/檔案（搜尋範圍不明確）
-- 多個獨立子問題可平行處理
-- 預期產生大量工具呼叫或長輸出
-- 連續失敗 ≥ 2 次的除錯（用 `root_cause`）
+跳過時**回覆首句必須寫明**例如：「inline 處理因為對話連續性」。靜默跳過 = 違規。
 
-反之，任務描述清晰、範圍明確、輸出短的請求，直接在主對話處理。
+**`routing_report.py` 識別以下首句格式為合法 skip（`skip_w_reason`）；其他措辭會被計為 `silently_skipped` 違規：**
+- `Override <hint>：<理由>`
+- `Overriding <hint>：<理由>`（英文也可）
+- `inline 處理因為<理由>`
+- `Skip <hint>：<理由>`
 
-可用 subagent 型別參考：
+### 為什麼要強制
+- 主 session 對「委派成本」短視——直接答的 context 膨脹是延遲成本，不會被即時感知
+- hook 已在 `routing_report.py` 整合 compliance 段追蹤遵從率，靜默跳過會被計入違規率（跑 `python ~/.claude/hooks/routing_report.py --days 14`）
+- 委派把答案壓成摘要回主 session，長對話下來省顯著 context
 
-| subagent_type    | 使用時機                              |
-|------------------|--------------------------------------|
-| `lookup`         | 定位檔案、函式、issue、wiki 頁         |
-| `research`       | 跨模組調查、架構理解                  |
-| `think_deeply`   | 設計討論、取捨分析、架構決策           |
-| `complex_rewrite`| 多步驟改寫、含 Redmine 工具的任務      |
-| `file_rewrite`   | 單一檔案格式或結構調整                |
-| `root_cause`     | 連續失敗診斷、環境問題定位             |
-
-呼叫規則（決定 spawn 時）：
-1. Agent prompt 以 user 原始 prompt（去掉 `[PROMPT_ROUTER]` 前綴）為核心
-2. 加入足夠的 session 上下文（相關路徑、已知資訊）讓 subagent 可獨立執行
-3. 若 `[PROMPT_ROUTER]` 帶 `strategy=use_deepwiki_first`，在 Agent prompt 中明確指示優先使用 deepwiki
+檢討：每週跑 `python3 ~/.claude/hooks/routing_report.py` 查看委派率、rejection 率、省下 tokens；rejection 率連兩週 > 30% 需調 gate。
 
 ### 收到 `delegate=gemma_chat` 時
 
