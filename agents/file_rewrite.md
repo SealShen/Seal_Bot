@@ -3,6 +3,7 @@ name: file_rewrite
 description: 單檔 atomic 改寫（主對話指定路徑、改動範圍明確）。由 prompt_router hint `subagent=file_rewrite` 觸發。回寫檔確認 + 路徑。適合 rename、格式調整、條列化、格式轉換。
 tools: Read, Edit, Write, Grep
 model: haiku
+isolation: worktree
 ---
 
 # file_rewrite — 單檔 atomic 改寫 subagent
