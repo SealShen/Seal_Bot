@@ -1,6 +1,6 @@
 ---
 name: file_rewrite
-description: 單檔 atomic 改寫（主對話指定路徑、改動範圍明確）。由 prompt_router hint `subagent=file_rewrite` 觸發。回寫檔確認 + 路徑。適合 rename、格式調整、條列化、格式轉換。
+description: Use WHEN: rewrite/refactor/edit a single specific file where the path is known and scope is clear — rename, reformat, restructure, convert format, add/remove sections. NOT for: multi-file edits (use complex_rewrite), research or analysis, tasks without a concrete file target.
 tools: Read, Edit, Write, Grep
 model: haiku
 isolation: worktree
