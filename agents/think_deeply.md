@@ -1,6 +1,6 @@
 ---
 name: think_deeply
-description: 設計討論與架構推理（怎麼辦／想想／評估／構思／討論）。由 prompt_router hint `subagent=think_deeply` 觸發。回思考摘要 + 推理路徑。適合取捨分析、架構決策、規格討論。
+description: Use WHEN: open-ended design discussion, trade-off analysis, architecture decisions, brainstorming, evaluating options (怎麼辦／想想／評估／構思／討論／該不該／有什麼方法). Runs Opus for high-quality reasoning. NOT for: trivial yes/no questions, status checks, short follow-ups, tasks with a clear action (edit/run/find).
 tools: Read, Grep, Glob, mcp__deepwiki__ask_question
 model: claude-opus-4-6
 ---
