@@ -97,10 +97,10 @@ git log @{u}..HEAD --oneline
 git add <changed files>
 git commit -m "<conventional title>" \
   -m "<body：簡述 fixes 與 why>" \
-  --trailer "Reviewed-by: claude-opus-4-7" \
+  --trailer "Reviewed-by: claude-opus-4-6" \
   --trailer "Tested-by: manual-checklist" \
   --trailer "Test-status: <passed|skipped>" \
-  --trailer "Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
+  --trailer "Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>"
 ```
 （用 `--trailer` 而非多個 `-m`，避免每個 trailer 各自成段違反 git trailer 規範）
 
