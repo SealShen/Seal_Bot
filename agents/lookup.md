@@ -1,6 +1,6 @@
 ---
 name: lookup
-description: 純檢索（看/找/列出 + 具體物件）。由 prompt_router hint `subagent=lookup` 觸發。只回事實（摘要+路徑/行號），不做推理。適合快速定位檔案、函式、Redmine issue、wiki 頁。
+description: Use WHEN: pure retrieval of a specific named artifact — find/list/read a file path, function definition, Redmine issue, wiki page, log entry (找/看/列出/搜尋 + named target). Returns facts only (path, line number, summary). NOT for: analysis, cross-file reasoning, tasks needing edits.
 tools: Read, Grep, Glob, mcp__redmine__get_redmine_issue, mcp__redmine__list_redmine_issues, mcp__redmine__get_redmine_wiki, mcp__redmine__search_wiki_history
 model: haiku
 ---
