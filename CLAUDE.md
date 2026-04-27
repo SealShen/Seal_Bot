@@ -108,11 +108,17 @@ Agent({
 
 ### 跳過委派的條件（必須在回覆首句明寫原因）
 只在以下情況可跳過：
-1. **對話連續性關鍵**：多輪設計討論中途，subagent 看不到前文會掉訊息
-2. **任務 trivial**：1-2 步驟可完成，委派 overhead 大於收益
+1. **對話連續性關鍵**：同一設計討論已進行 **≥ 3 輪以上**，subagent 看不到前文會掉關鍵 context。前 1-2 輪**不適用**此例外。
+2. **任務 trivial**：1-2 步驟可完成，委派 overhead 大於收益。**`think_deeply` 不算 trivial，即使問題很短** — think_deeply subagent 跑 **Opus**（高推理品質），跳過等於主動降級到 Sonnet inline，不符合 trivial 定義。
 3. **使用者明確點名要主 session 回答**
 
 跳過時**回覆首句必須寫明**例如：「inline 處理因為對話連續性」。靜默跳過 = 違規。
+
+**`routing_report.py` 識別以下首句格式為合法 skip（`skip_w_reason`）；其他措辭會被計為 `silently_skipped` 違規：**
+- `Override <hint>：<理由>`
+- `Overriding <hint>：<理由>`（英文也可）
+- `inline 處理因為<理由>`
+- `Skip <hint>：<理由>`
 
 ### 為什麼要強制
 - 主 session 對「委派成本」短視——直接答的 context 膨脹是延遲成本，不會被即時感知
