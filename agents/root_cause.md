@@ -3,6 +3,7 @@ name: root_cause
 description: 錯誤恢復與根本原因分析（抱歉/失敗/錯誤訊號 ≥2）。由 prompt_router hint `subagent=root_cause` 觸發。回根因摘要 + 相關路徑 + 修正策略。適合連續失敗的 debug、回歸診斷、環境問題定位。
 tools: Read, Grep, Glob, Bash, mcp__redmine__get_redmine_issue
 model: claude-opus-4-6
+isolation: worktree
 ---
 
 # root_cause — 根因分析 subagent
