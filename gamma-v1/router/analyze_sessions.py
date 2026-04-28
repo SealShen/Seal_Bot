@@ -43,7 +43,10 @@ BASE = os.environ.get("GOOGLE_AI_BASE_URL", "http://localhost:1234/v1")
 MODEL = os.environ.get("ANALYZE_MODEL") or os.environ.get("GOOGLE_AI_MODEL", "local-model")
 KEY = os.environ.get("GOOGLE_AI_API_KEY", "")
 PROJECTS = Path.home() / ".claude" / "projects"
-OUT = PROJECTS / "C--Users-<username>-MyClaw" / "memory" / "_suggestions.md"
+PROJECT_ROOT = ROOT.parent  # MyClaw root（gamma-v1 的上一層）
+# Claude Code project slug 由絕對路徑將 ':', '\\', '/' 全替換為 '-' 而成
+PROJECT_SLUG = str(PROJECT_ROOT.resolve()).replace(":", "-").replace("\\", "-").replace("/", "-")
+OUT = PROJECTS / PROJECT_SLUG / "memory" / "_suggestions.md"
 PROGRESS_FILE = HERE / ".analyze_progress.json"
 ANCHORS_FILE = HERE / "analysis_anchors.md"
 

@@ -49,7 +49,7 @@ function formatLinkedInDraft(messages, projectSlug, date) {
   return [
     `🚀 今天的學習紀錄 | ${date}`,
     ``,
-    `最近在 ${projectSlug.replace(/c--Users-<username>-/, "").replace(/-/g, " ")} 專案與 AI 協作，整理幾個重要的學習收穫：`,
+    `最近在 ${projectSlug.replace(/^c--Users-[^-]+-/, "").replace(/-/g, " ")} 專案與 AI 協作，整理幾個重要的學習收穫：`,
     ``,
     ...snippets,
     ``,
