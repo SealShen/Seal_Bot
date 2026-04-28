@@ -19,6 +19,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
+PROJECT_ROOT = ROOT.parent  # MyClaw 根目錄
 
 def _load_dotenv():
     env_path = ROOT / ".env"
