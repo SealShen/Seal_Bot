@@ -39,7 +39,8 @@ KEY = os.environ.get("GOOGLE_AI_API_KEY", "")
 MODEL = os.environ.get("GOOGLE_AI_MODEL", "gemini-2.5-flash-lite")
 
 PROJECTS = Path.home() / ".claude" / "projects"
-OUT = ROOT / "audit_baseline.md"
+OUT = PROJECT_ROOT / "output" / "audit" / "audit_baseline.md"
+OUT.parent.mkdir(parents=True, exist_ok=True)
 
 DAYS = 14
 BATCH_SIZE = 15
