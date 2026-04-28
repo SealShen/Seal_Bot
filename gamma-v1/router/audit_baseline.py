@@ -1,7 +1,7 @@
 """audit_baseline.py — one-time classification audit of past 14-day user prompts.
 
 Classifies real user text prompts (not tool-results) via Gemini Flash-Lite batched,
-into delegation categories. Produces audit_baseline.md for methodology review.
+into delegation categories. Produces output/audit/audit_baseline.md for methodology review.
 
 Run:
   python audit_baseline.py            # full run (~5 min)
