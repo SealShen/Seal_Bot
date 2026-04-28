@@ -6,6 +6,10 @@
 **/node_modules/
 
 # ── 產生的資料 ────────────────────────────────────────────────────────────────
+# 任務產出物統一收容處（仿 Netivism/Claude/output/ pattern）
+# session 分析、audit baseline、各種 auto-generated 報告都放這裡
+output/
+
 # Bot session 記錄（含 session ID，不需備份）
 **/sessions.json
 
