@@ -181,6 +181,53 @@ for fname in tracked_files.splitlines():
     if SENSITIVE_EXTS.search(fname):
         issues.append(f'[機敏副檔名] 檔案 "{fname}" 不應被 git 追蹤，請加入 .gitignore')
 
+# Layer 1.5：commit metadata 掃描（2026-04-28 新增）
+# 檢查 unpushed commits 的 author name / email 是否含系統帳號
+# 動機：2026-04-28 Seal_Bot 公開 repo 洩露事件 — 既有 Layer 2 只掃 diff content，
+#      不掃 commit metadata，導致 author "leond <leondeseal@gmail.com>" 直接公開
+if sys_user:
+    user_re = re.compile(
+        rf'(?<![a-zA-Z0-9_-]){re.escape(sys_user)}(?![a-zA-Z0-9_-])',
+        re.IGNORECASE
+    )
+    meta_out, _ = run(['git', 'log', f'{remote}/HEAD..HEAD', '--pretty=%H%x1f%an%x1f%ae'])
+    if not meta_out:
+        meta_out, _ = run(['git', 'log', '-1', '--pretty=%H%x1f%an%x1f%ae'])
+    for entry in (meta_out or '').splitlines():
+        parts = entry.split('\x1f')
+        if len(parts) < 3:
+            continue
+        sha, name, email = parts
+        if user_re.search(name) or user_re.search(email):
+            issues.append(
+                f'[commit metadata 含系統帳號 "{sys_user}"]\n'
+                f'  → {sha[:8]} {name} <{email}>\n'
+                f'  fix: git config user.name/user.email 改成不含 "{sys_user}" 的值，'
+                f'然後用 git filter-repo --mailmap 重寫歷史'
+            )
+
+# 可選：baseline 全掃（push 指令末尾加 # baseline-scan 觸發）
+# 用途：security hook 首次接觸新 repo 時，掃 HEAD 整棵 tree 找既有洩露
+# 動機：既有 diff scan 預設只看新增行，原有 push 上去的內容會被默認豁免
+if '# baseline-scan' in command:
+    print('[git-push-guard] BASELINE scan: 檢查 HEAD tree 全部追蹤檔案...')
+    files_all, _ = run(['git', 'ls-files'])
+    for fname in (files_all or '').splitlines():
+        fname = fname.strip()
+        if not fname:
+            continue
+        try:
+            with open(fname, 'r', encoding='utf-8', errors='replace') as fh:
+                content = fh.read(50000)  # 50KB cap per file
+        except (OSError, IOError):
+            continue
+        for pattern, label in PATTERNS:
+            m = pattern.search(content)
+            if m:
+                line_no = content[:m.start()].count('\n') + 1
+                issues.append(f'[baseline {label}] {fname}:{line_no}')
+                break
+
 # ── 輸出結果 ───────────────────────────────────────────────────────────────────
 if issues:
     deduped = list(dict.fromkeys(issues))  # 保序去重
