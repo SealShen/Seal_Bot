@@ -9,6 +9,23 @@ const os = require('os');
 const TMP_WEBFETCH  = path.join(os.tmpdir(), 'claude_webfetch');
 const { verify: totpVerify, generateSecret, generateURI } = require('otplib');
 const QRCode = require('qrcode');
+const telegramifyMarkdown = require('telegramify-markdown');
+
+// telegramify-markdown 不 escape V2 保留字中無 markdown 語意的字元（. ! + = { }）
+// 此函式在 code block 外補 escape，code block 內不動（V2 規定 code 內只需 escape \ 和 `）
+function postEscapeV2(text) {
+  return text
+    .replace(/(```[\s\S]*?```|`[^`\n]+`)|\\\\([.!+={}])/g, (m, code, ch) => {
+      if (code) return code;
+      if (ch) return '\\' + ch;
+      return m;
+    })
+    .replace(/(```[\s\S]*?```|`[^`\n]+`)|(?<!\\)([.!+={}])/g, (m, code, ch) => {
+      if (code) return code;
+      if (ch) return '\\' + ch;
+      return m;
+    });
+}
 
 // ── Config ────────────────────────────────────────────────────────────────────
 const TOKEN           = process.env.TELEGRAM_TOKEN;
@@ -328,13 +345,28 @@ async function runClaude(prompt, chatId, forceNew = false, imagePaths = []) {
       saveBotActiveSession(capturedSession);
     }
 
-    const icon   = code === 0 ? '✅' : '❌';
-    const footer = code !== 0 ? `  _(exit ${code})_` : '';
-    const text   = `${icon} 完成${footer}\n\`\`\`\n${tail(output) || '(no output)'}\n\`\`\``;
+    const icon = code === 0 ? '✅' : '❌';
+    const footerV1 = code !== 0 ? `  _(exit ${code})_` : '';
+    const bodyText = tail(output) || '(no output)';
+
+    let renderedOk = false;
     try {
-      await bot.editMessageText(text, { chat_id: chatId, message_id: msgId });
-    } catch {
-      await bot.sendMessage(chatId, text);
+      const headerV2 = code === 0
+        ? '✅ *完成*\n\n'
+        : `❌ *完成*  _\\(exit ${code}\\)_\n\n`;
+      const rendered = headerV2 + postEscapeV2(telegramifyMarkdown(bodyText, 'escape'));
+      console.log('[TG_RENDER_DEBUG] rendered:\n' + rendered);
+      await bot.editMessageText(rendered, { chat_id: chatId, message_id: msgId, parse_mode: 'MarkdownV2' });
+      renderedOk = true;
+    } catch {}
+
+    if (!renderedOk) {
+      const fallback = `${icon} 完成${footerV1}\n\`\`\`\n${bodyText}\n\`\`\``;
+      try {
+        await bot.editMessageText(fallback, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' });
+      } catch {
+        await bot.sendMessage(chatId, fallback).catch(() => {});
+      }
     }
   });
 }
