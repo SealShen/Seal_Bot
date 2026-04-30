@@ -2,7 +2,7 @@
 name: root_cause
 description: Use WHEN: ≥2 failure/error signals in recent context — repeated errors, broken builds, regression debugging, environment issues (抱歉/出錯/失敗/不對 appearing multiple times). Returns root cause summary + affected paths + fix strategy. NOT for: single errors, general questions about how something works.
 tools: Read, Grep, Glob, Bash, mcp__redmine__get_redmine_issue
-model: claude-opus-4-6
+model: opus
 isolation: worktree
 ---
 
