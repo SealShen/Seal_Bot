@@ -11,8 +11,16 @@ const { verify: totpVerify, generateSecret, generateURI } = require('otplib');
 const QRCode = require('qrcode');
 const telegramifyMarkdown = require('telegramify-markdown');
 
-// telegramify-markdown 不 escape V2 保留字中無 markdown 語意的字元（. ! + = { }）
-// 此函式在 code block 外補 escape，code block 內不動（V2 規定 code 內只需 escape \ 和 `）
+function tablesToCodeBlocks(text) {
+  return text.replace(/((?:^\|.*$\n?)+)/gm, (block) => {
+    if (/^\|[\s:-]*-{2,}[\s:-]*\|/m.test(block)) {
+      const trimmed = block.replace(/\n$/, '');
+      return '```\n' + trimmed + '\n```\n';
+    }
+    return block;
+  });
+}
+
 function postEscapeV2(text) {
   return text
     .replace(/(```[\s\S]*?```|`[^`\n]+`)|\\\\([.!+={}])/g, (m, code, ch) => {
@@ -85,6 +93,7 @@ let currentSessionId = null; // null = --continue, string = --resume <id>
 let autoMode        = false; // --dangerously-skip-permissions toggle
 let claudeModel     = null;  // null = 預設, 'haiku'|'sonnet'|'opus' = --model 指定
 let pendingGemmaContext = null; // 從 gemma 切回 Claude 時，保存 gemma 最後一句回覆，下次送 Claude 時前置一次
+let codexMode       = false; // codex（OpenAI codex-cli）模式 toggle，由 ✨Model 按鈕切換
 
 const SESSIONS_FILE = path.join(__dirname, 'sessions.json');
 let recentSessions = (() => {
@@ -354,7 +363,7 @@ async function runClaude(prompt, chatId, forceNew = false, imagePaths = []) {
       const headerV2 = code === 0
         ? '✅ *完成*\n\n'
         : `❌ *完成*  _\\(exit ${code}\\)_\n\n`;
-      const rendered = headerV2 + postEscapeV2(telegramifyMarkdown(bodyText, 'escape'));
+      const rendered = headerV2 + postEscapeV2(telegramifyMarkdown(tablesToCodeBlocks(bodyText), 'escape'));
       console.log('[TG_RENDER_DEBUG] rendered:\n' + rendered);
       await bot.editMessageText(rendered, { chat_id: chatId, message_id: msgId, parse_mode: 'MarkdownV2' });
       renderedOk = true;
@@ -707,7 +716,27 @@ bot.on('callback_query', async (query) => {
 
   // ✨Model 選擇
   if (data.startsWith('model:')) {
-    const choice = data.slice(6); // 'gemma' | 'haiku' | 'sonnet' | 'opus'
+    const choice = data.slice(6); // 'gemma' | 'codex' | 'haiku' | 'sonnet' | 'opus'
+    if (choice === 'codex') {
+      if (!runCodex) {
+        bot.editMessageText('❌ codex-runner 未載入（缺少 my-lobster/codex-runner.js）。', { chat_id: chatId, message_id: msgId });
+        return;
+      }
+      codexMode = !codexMode;
+      // 互斥：開 codex 時把 gemma 與 claudeModel 都清掉
+      if (codexMode) {
+        gemmaMode = false;
+        gemmaHistory = [];
+        claudeModel = null;
+      }
+      bot.editMessageText(
+        codexMode
+          ? '🦊 *Codex 模式開啟*\n普通訊息直接傳給 codex-cli（OpenAI）'
+          : '💻 *Codex 模式關閉*\n普通訊息回到 Claude Code',
+        { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' }
+      );
+      return;
+    }
     if (choice === 'gemma') {
       if (!gemmaExecute) {
         bot.editMessageText('❌ gemma-v1 未安裝。', { chat_id: chatId, message_id: msgId });
@@ -715,6 +744,7 @@ bot.on('callback_query', async (query) => {
       }
       gemmaMode = !gemmaMode;
       claudeModel = null;
+      codexMode = false; // 互斥
 
       let inheritNote = '';
       if (gemmaMode) {
@@ -750,6 +780,7 @@ bot.on('callback_query', async (query) => {
       }
       gemmaMode = false;
       gemmaHistory = [];
+      codexMode = false; // 互斥
       const modelMap = { haiku: 'haiku', sonnet: 'claude-sonnet-4-6', opus: 'claude-opus-4-6' };
       claudeModel = modelMap[choice] ?? choice;
       const label = choice === 'haiku' ? '⚡ Haiku' : choice === 'sonnet' ? '🎵 Sonnet（預設）' : '🏛 Opus';
@@ -906,6 +937,10 @@ let gemmaExecute = null;
 try {
   gemmaExecute = require('../gamma-v1/index').execute;
 } catch {}
+
+// codex-cli runner（OpenAI codex）
+let runCodex = null;
+try { runCodex = require('./codex-runner').runCodex; } catch {}
 
 // gemma 模式：開啟後，普通訊息走 gemma 而非 Claude Code
 let gemmaMode = false;
@@ -1065,6 +1100,25 @@ bot.onText(/\/gemma(.*)/, async (msg, match) => {
   }
 });
 
+// /codex <prompt> — 單次呼叫 codex（不切模式，下一句仍走當前 backend）
+bot.onText(/\/codex(.*)/, async (msg, match) => {
+  if (!isAllowed(msg.from.id)) return;
+  if (!requireAuth(msg.chat.id)) return;
+  if (!runCodex) {
+    bot.sendMessage(msg.chat.id, '❌ codex-runner 未載入（缺少 my-lobster/codex-runner.js）。');
+    return;
+  }
+  const prompt = (match[1] || '').trim();
+  if (!prompt) {
+    bot.sendMessage(msg.chat.id,
+      '*codex 用法：*\n`/codex <prompt>`\n\n單次執行，不切模式。長期切到 Codex 請點 ✨Model → 🦊 Codex。',
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
+  await runCodexFlow(prompt, msg.chat.id);
+});
+
 bot.onText(/\/new (.+)/, async (msg, match) => {
   if (!isAllowed(msg.from.id)) return;
   if (!requireAuth(msg.chat.id)) return;
@@ -1140,6 +1194,69 @@ async function safeRunClaude(prompt, chatId, forceNew = false, imagePaths = []) 
   await runClaude(prompt, chatId, forceNew, imagePaths);
 }
 
+// ── Codex flow（給 /codex 與 codex 模式訊息分支共用）─────────────────────────
+async function runCodexFlow(prompt, chatId) {
+  if (!runCodex) {
+    await bot.sendMessage(chatId, '❌ codex-runner 未載入。');
+    return;
+  }
+  const statusMsg = await bot.sendMessage(chatId, '🦊 Codex 思考中…');
+  const msgId = statusMsg.message_id;
+
+  let lastSnapshot = '';
+  let lastSent     = '';
+  const startTime  = Date.now();
+
+  const timer = setInterval(async () => {
+    const elapsed = Math.floor((Date.now() - startTime) / 1000);
+    if (lastSnapshot && lastSnapshot !== lastSent) {
+      await safeEdit(chatId, msgId, `🦊 ${elapsed}s\n\`\`\`\n${tail(lastSnapshot)}\n\`\`\``);
+      lastSent = lastSnapshot;
+    } else if (!lastSnapshot) {
+      await safeEdit(chatId, msgId, `🦊 Codex 思考中… ${elapsed}s`);
+    }
+  }, STREAM_INTERVAL);
+
+  try {
+    const result = await runCodex({
+      prompt,
+      workingDir,
+      autoMode,
+      onProgress: (snap) => { lastSnapshot = snap; },
+      onProc: (p) => { currentProc = p; },
+    });
+    clearInterval(timer);
+    currentProc = null;
+
+    const icon = result.ok ? '✅' : '❌';
+    const footerV1 = result.ok ? '' : `  _(exit ${result.exitCode})_`;
+    const bodyText = tail(result.output) || (result.error ? result.error : '(no output)');
+
+    let renderedOk = false;
+    try {
+      const headerV2 = result.ok
+        ? '🦊 *Codex 完成*\n\n'
+        : `🦊❌ *Codex* _\\(exit ${result.exitCode}\\)_\n\n`;
+      const rendered = headerV2 + postEscapeV2(telegramifyMarkdown(tablesToCodeBlocks(bodyText), 'escape'));
+      await bot.editMessageText(rendered, { chat_id: chatId, message_id: msgId, parse_mode: 'MarkdownV2' });
+      renderedOk = true;
+    } catch {}
+
+    if (!renderedOk) {
+      const fallback = `${icon} Codex${footerV1}\n\`\`\`\n${bodyText}\n\`\`\``;
+      try {
+        await bot.editMessageText(fallback, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' });
+      } catch {
+        await bot.sendMessage(chatId, fallback).catch(() => {});
+      }
+    }
+  } catch (err) {
+    clearInterval(timer);
+    currentProc = null;
+    await safeEdit(chatId, msgId, `❌ Codex 錯誤：${err.message}`);
+  }
+}
+
 // ── Message handler ───────────────────────────────────────────────────────────
 bot.on('message', async (msg) => {
   if (!isAllowed(msg.from.id)) return;
@@ -1207,9 +1324,10 @@ bot.on('message', async (msg) => {
         ? `指定 \`${currentSessionId.slice(0, 8)}…\``
         : (newSession ? '新' : '繼續上次');
       const gemmaSuffix = gemmaMode ? `\n*模式：* 🤖 Gemma（${gemmaHistory.length / 2 | 0} 輪歷史）` : '';
+      const codexSuffix = codexMode ? '\n*模式：* 🦊 Codex（OpenAI）' : '';
       const autoSuffix = autoMode ? '\n*Auto Mode：* ⚠️ 開啟（跳過工具確認）' : '';
       bot.sendMessage(msg.chat.id,
-        `*狀態：* ${status}\n*目錄：* \`${workingDir}\`\n*Session：* ${sessLabel}${gemmaSuffix}${autoSuffix}`,
+        `*狀態：* ${status}\n*目錄：* \`${workingDir}\`\n*Session：* ${sessLabel}${gemmaSuffix}${codexSuffix}${autoSuffix}`,
         { parse_mode: 'Markdown', reply_markup: MAIN_KEYBOARD }
       );
       return;
@@ -1236,18 +1354,27 @@ bot.on('message', async (msg) => {
     }
 
     if (text === '✨Model') {
-      const current = gemmaMode ? 'gemma' : (claudeModel || 'sonnet');
+      const current = codexMode ? 'codex'
+                    : gemmaMode  ? 'gemma'
+                    : (claudeModel || 'sonnet');
       bot.sendMessage(msg.chat.id, `✨ *Model 選擇*\n目前：\`${current}\`\n\n選擇要切換的模型：`, {
         parse_mode: 'Markdown',
         reply_markup: {
           inline_keyboard: [
             [{ text: `${current === 'gemma'  ? '✅ ' : ''}🤖 Gemma（本機）`,  callback_data: 'model:gemma'  }],
+            [{ text: `${current === 'codex'  ? '✅ ' : ''}🦊 Codex（OpenAI）`, callback_data: 'model:codex' }],
             [{ text: `${current === 'haiku'  ? '✅ ' : ''}⚡ Haiku`,          callback_data: 'model:haiku'  }],
             [{ text: `${current === 'sonnet' ? '✅ ' : ''}🎵 Sonnet（預設）`, callback_data: 'model:sonnet' }],
             [{ text: `${current === 'opus'   ? '✅ ' : ''}🏛 Opus`,           callback_data: 'model:opus'   }],
           ],
         },
       });
+      return;
+    }
+
+    // codex 模式：普通訊息走 codex-cli（無歷史，每次 ephemeral）
+    if (codexMode && runCodex) {
+      await runCodexFlow(text, msg.chat.id);
       return;
     }
 
