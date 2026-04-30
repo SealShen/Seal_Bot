@@ -364,10 +364,9 @@ async function runClaude(prompt, chatId, forceNew = false, imagePaths = []) {
         ? '✅ *完成*\n\n'
         : `❌ *完成*  _\\(exit ${code}\\)_\n\n`;
       const rendered = headerV2 + postEscapeV2(telegramifyMarkdown(tablesToCodeBlocks(bodyText), 'escape'));
-      console.log('[TG_RENDER_DEBUG] rendered:\n' + rendered);
       await bot.editMessageText(rendered, { chat_id: chatId, message_id: msgId, parse_mode: 'MarkdownV2' });
       renderedOk = true;
-    } catch {}
+    } catch (e) { console.warn('[MarkdownV2 fail]', e.message); }
 
     if (!renderedOk) {
       const fallback = `${icon} 完成${footerV1}\n\`\`\`\n${bodyText}\n\`\`\``;
@@ -937,8 +936,6 @@ let gemmaExecute = null;
 try {
   gemmaExecute = require('../gamma-v1/index').execute;
 } catch {}
-
-// codex-cli runner（OpenAI codex）
 let runCodex = null;
 try { runCodex = require('./codex-runner').runCodex; } catch {}
 
@@ -1240,7 +1237,7 @@ async function runCodexFlow(prompt, chatId) {
       const rendered = headerV2 + postEscapeV2(telegramifyMarkdown(tablesToCodeBlocks(bodyText), 'escape'));
       await bot.editMessageText(rendered, { chat_id: chatId, message_id: msgId, parse_mode: 'MarkdownV2' });
       renderedOk = true;
-    } catch {}
+    } catch (e) { console.warn('[MarkdownV2 fail]', e.message); }
 
     if (!renderedOk) {
       const fallback = `${icon} Codex${footerV1}\n\`\`\`\n${bodyText}\n\`\`\``;

@@ -32,7 +32,7 @@ function formatItem(item) {
 function runCodex({ prompt, workingDir, autoMode = false, model = null, onProgress = null, onProc = null }) {
   return new Promise((resolve) => {
     const sandbox = autoMode ? 'danger-full-access' : 'workspace-write';
-    const args = ['exec', '--json', '--ephemeral', '--skip-git-repo-check', '--sandbox', sandbox];
+    const args = ['exec', '--json', '--ephemeral', '--skip-git-repo-check', '--color', 'never', '--sandbox', sandbox];
     if (autoMode) args.push('--dangerously-bypass-approvals-and-sandbox');
     if (model) args.push('-m', model);
 
