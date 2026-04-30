@@ -2,7 +2,7 @@
 name: think_deeply
 description: Use WHEN: open-ended design discussion, trade-off analysis, architecture decisions, brainstorming, evaluating options (怎麼辦／想想／評估／構思／討論／該不該／有什麼方法). Runs Opus for high-quality reasoning. NOT for: trivial yes/no questions, status checks, short follow-ups, tasks with a clear action (edit/run/find).
 tools: Read, Grep, Glob, mcp__deepwiki__ask_question
-model: claude-opus-4-6
+model: opus
 ---
 
 # think_deeply — 設計思考 subagent
