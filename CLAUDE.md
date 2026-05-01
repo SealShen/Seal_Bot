@@ -2,16 +2,8 @@
 
 此專案是 MyClaw Telegram Bot 的程式碼本體。
 
----
-
-## Git Push 安全規範
-
-Git push 前須通過安全掃描，詳細步驟見全域設定：
-
-> `agent_global_configs/CLAUDE.md` → **Git Push 前強制安全掃描**
-
-掃描由 `PreToolUse(Bash)` hook 自動攔截執行，無需手動呼叫。
-發現問題時 hook 會列出清單並阻斷 push，須先修正再重新 commit 後 push。
+> 全域規則（Git Push 安全掃描 / Gemma 委派 / Prompt Router / Worktree gate）集中於
+> `agent_global_configs/CLAUDE.md`，由對應 hook 自動執行。
 
 ---
 
@@ -28,75 +20,24 @@ Commit message 由 Gemma 根據 diff 產生，失敗則 fallback 為 `chore(<fil
 
 ---
 
-## Gemma 本地模型委派
+## Gemma MCP server 位置
 
-Gemma 本地模型委派規則已移至全域設定：
-
-> `agent_global_configs/CLAUDE.md` → **Gemma 本地模型委派**
-
-MCP server 腳本位於本 repo `gamma-v1/mcp_gemma_server.js`，由 user-scope MCP 註冊後於所有 session 可用。
-用量 log 寫入 `gamma-v1/gemma_usage.log`（因 `__dirname` 固定，跨專案呼叫自動匯總）。
+- 腳本：`gamma-v1/mcp_gemma_server.js`（user-scope MCP 註冊，所有 session 可用）
+- 用量 log：`gamma-v1/gemma_usage.log`（`__dirname` 固定，跨專案呼叫自動匯總）
 
 ---
 
 ## Haiku 搜尋委派（訂閱用戶版）
 
-使用者是 Claude Pro/Max 訂閱用戶，**不是 API 付費用戶**。所以搜尋委派不走 Anthropic API，而是用 Claude Code 原生的 subagent 機制讓 Haiku 吃訂閱配額（消耗率遠低於 Opus）。
+使用者是 Pro/Max 訂閱用戶（非 API 付費）。搜尋類任務用
+`Agent(subagent_type="Explore", model="haiku", prompt=...)` 委派，吃訂閱配額不走 API
+（Haiku ≈ Opus 1/15 消耗）。
 
-做法：`Agent` tool + `subagent_type: Explore` + `model: "haiku"` override。
-- 不需要 API key
-- 消耗訂閱配額，但 Haiku ≈ Opus 的 1/15（按官方 pricing 比例估）
-- 0 新程式碼、0 新基礎設施
+**該委派**：Glob/Grep 類查找、目錄盤點、log/config 固定欄位抽取。
+**不該委派**：跨檔邏輯推理、Write/Edit/Bash、架構判斷、使用者明確點名 Claude 回答。
 
-### 什麼任務該這樣委派
-- 找檔案：`Glob` 類任務（pattern 明確、不需要理解程式碼）
-- 找 symbol / keyword：`Grep` 類任務後做摘要
-- 盤點資料夾結構：列出某目錄下有什麼
-- 讀檔後抽取固定欄位：像 log 解析、config 列表
+**觸發（強制）**：`UserPromptSubmit` hook 輸出 `[MODEL_ROUTER] tier=haiku` 時，主
+session 不要直接 Glob/Grep，改委派 Explore agent。
 
-### 什麼任務**不要**委派
-- 跨檔案邏輯推理（追 call graph、理解資料流）
-- 需要 Write/Edit/Bash 的任何工作
-- 架構判斷或多訊號整合
-- 使用者明確點名要 Claude 回答的問題
-
-### 使用範例
-```
-Agent({
-  description: "Find bot entry file",
-  subagent_type: "Explore",
-  model: "haiku",
-  prompt: "Find the main Telegram bot entry file in my-lobster/. Report file path and the line where bot is initialized. Under 100 words."
-})
-```
-
-### 觸發條件（強制）
-當 `UserPromptSubmit` hook 輸出 `[MODEL_ROUTER] tier=haiku` 時，**優先用 `Agent(subagent_type="Explore", model="haiku", prompt=...)` 委派**，不要用主 session 直接 Glob/Grep。這條規則讓 route hook 的判斷真正發生效果，而不是只印字串。
-
-### 量測（追蹤省幅，確保真的比較省）
-- 全域 `PostToolUse` hook（`~/.claude/hooks/delegation_tracker.py`）會對每次 Agent tool call 寫一筆到 `~/.claude/delegation-usage.log`（JSONL）
-- 欄位：`ts, session_id, subagent_type, model_override, prompt_chars, response_chars`
-- 跑 `python ~/.claude/delegation-report.py` 輸出：依 model tier 分桶的呼叫次數、估算 token、counterfactual USD 省幅（假設不委派就全走 Opus）
-- pricing 做 proxy：訂閱配額沒 per-call 計數，但消耗率比例和 API pricing 一致，所以 USD 估值雖非真實帳單，**方向與量級正確**
-- 檢核目標：若 report 的 `Saved` 隨時間穩定增長、`Calls` haiku 桶佔比上升，代表委派機制有在運作
-
-### 注意：曾有一個自建 Haiku MCP 被評估後刪除
-- 曾短暫建過 `gamma-v1/haiku-search/`（MCP server + Anthropic SDK），但那個架構的省錢算法假設 Opus API 付費單價 $75/1M，**對訂閱用戶不適用**——反而是「花 API 錢省訂閱配額」方向錯誤
-- 已整包刪除；`.mcp.json` 不要再加回 `haiku-search` entry
-- 若將來真的開 Anthropic API 付費帳戶才重新評估
-
----
-
-## Prompt Router 委派規則
-
-委派規則已移至全域設定：
-
-> `agent_global_configs/CLAUDE.md` → **Prompt Router subagent 指派**
-
----
-
-## Worktree 隔離 Gate
-
-Worktree gate 規則已移至全域設定：
-
-> `agent_global_configs/CLAUDE.md` → **Worktree 隔離 Gate**
+**歷史**：曾短暫建過 `gamma-v1/haiku-search/`（MCP + Anthropic SDK），但對訂閱用戶是
+「花 API 錢省訂閱配額」方向錯誤，已整包刪除；`.mcp.json` 不要再加回 `haiku-search`。
