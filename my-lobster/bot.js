@@ -101,6 +101,7 @@ const CODEX_HISTORY_TURNS = 4; // codex 每呼叫成本高，少留一點
 let codexInheritedContext = null;
 // 切回 Claude 時，把 codex 最後輸出帶過去（一次性，下次 Claude 訊息前置）
 let pendingCodexContext = null;
+let pendingCompactContext = null;
 
 const SESSIONS_FILE = path.join(__dirname, 'sessions.json');
 let recentSessions = (() => {
@@ -294,7 +295,12 @@ async function runClaude(prompt, chatId, forceNew = false, imagePaths = []) {
   const codexSection = codexCtx
     ? `[以下是使用者剛才在 Codex（OpenAI codex-cli）那邊得到的最後一段輸出，僅供參考脈絡，請根據使用者接下來的訊息回應]\n${codexCtx}\n\n---\n\n`
     : '';
-  proc.stdin.write(langPrefix + gemmaSection + codexSection + prompt + imageSection, 'utf8');
+  const compactCtx = pendingCompactContext;
+  pendingCompactContext = null;
+  const compactSection = compactCtx
+    ? `[以下是先前對話的壓縮摘要，請據此理解脈絡並繼續協助使用者]\n${compactCtx}\n\n---\n\n`
+    : '';
+  proc.stdin.write(langPrefix + compactSection + gemmaSection + codexSection + prompt + imageSection, 'utf8');
   proc.stdin.end();
 
   currentProc = proc;
@@ -1259,6 +1265,147 @@ bot.onText(/\/cancel/, (msg) => {
   } else {
     bot.sendMessage(msg.chat.id, '目前沒有執行中的指令。');
   }
+});
+
+bot.onText(/^\/compact$/, async (msg) => {
+  if (!isAllowed(msg.from.id)) return;
+  if (!requireAuth(msg.chat.id)) return;
+  if (currentProc) {
+    bot.sendMessage(msg.chat.id, '⚠️ 目前有指令執行中，請等待完成後再壓縮。');
+    return;
+  }
+  if (!currentSessionId) {
+    bot.sendMessage(msg.chat.id, '目前沒有活躍的 session 可以壓縮。');
+    return;
+  }
+
+  const slug = pathToSlug(workingDir).toLowerCase();
+  let actualDir = null;
+  try {
+    const dirs = fs.readdirSync(PROJECTS_ROOT);
+    actualDir = dirs.find(d => d.toLowerCase() === slug);
+  } catch {}
+  if (!actualDir) {
+    bot.sendMessage(msg.chat.id, '❌ 找不到對應的專案目錄。');
+    return;
+  }
+  const sessionPath = path.join(PROJECTS_ROOT, actualDir, currentSessionId + '.jsonl');
+  if (!fs.existsSync(sessionPath)) {
+    bot.sendMessage(msg.chat.id, '❌ Session 檔案不存在。');
+    return;
+  }
+
+  const statusMsg = await bot.sendMessage(msg.chat.id, '🗜️ 壓縮 session 中…');
+
+  // 讀取 session JSONL，提取對話文字
+  const history = [];
+  try {
+    const content = fs.readFileSync(sessionPath, 'utf8');
+    const lines = content.split('\n').filter(l => l.trim());
+    for (const line of lines) {
+      let ev;
+      try { ev = JSON.parse(line); } catch { continue; }
+      if (ev.type !== 'user' && ev.type !== 'assistant') continue;
+      const parts = ev.message?.content;
+      let text = '';
+      if (Array.isArray(parts)) {
+        text = parts.filter(p => p.type === 'text' && p.text).map(p => p.text).join('\n').trim();
+      } else if (typeof parts === 'string') {
+        text = parts.trim();
+      }
+      if (!text) continue;
+      const last = history[history.length - 1];
+      if (last && last.role === ev.type) {
+        last.content += '\n\n' + text;
+      } else {
+        history.push({ role: ev.type, content: text });
+      }
+    }
+  } catch (e) {
+    await bot.editMessageText(`❌ 讀取 session 失敗：${e.message}`,
+      { chat_id: msg.chat.id, message_id: statusMsg.message_id });
+    return;
+  }
+
+  if (history.length < 2) {
+    await bot.editMessageText('ℹ️ 對話太短，不需要壓縮。',
+      { chat_id: msg.chat.id, message_id: statusMsg.message_id });
+    return;
+  }
+
+  // 組成對話摘要（限制在 25000 字元內避免 prompt 爆掉）
+  let conversationText = '';
+  for (const m of history) {
+    const tag = m.role === 'user' ? 'User' : 'Assistant';
+    const body = m.content.length > 2000 ? m.content.slice(0, 2000) + '…(略)' : m.content;
+    conversationText += `${tag}: ${body}\n\n`;
+    if (conversationText.length > 25000) break;
+  }
+
+  const compactPrompt = `以下是一段使用者與 AI 助手的對話紀錄。請將其壓縮為一份精簡的脈絡摘要（500字以內），包含：
+1. 使用者的主要目標與需求
+2. 已做出的關鍵決策與完成的工作
+3. 目前進度與待辦事項
+4. 重要的技術細節或限制條件
+
+只輸出摘要本身，用繁體中文，不要加標題或前言。
+
+---對話紀錄---
+${conversationText}`;
+
+  const args = ['--print', '--no-session-persistence'];
+  if (claudeModel) args.push('--model', claudeModel);
+
+  const env = { ...process.env };
+  delete env.CLAUDECODE;
+  delete env.ANTHROPIC_API_KEY;
+
+  const proc = spawn('claude', args, {
+    cwd: workingDir,
+    windowsHide: true,
+    shell: true,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env,
+  });
+  currentProc = proc;
+  proc.stdin.write(compactPrompt, 'utf8');
+  proc.stdin.end();
+
+  let output = '';
+  proc.stdout.on('data', (chunk) => { output += chunk.toString(); });
+
+  proc.on('error', async (err) => {
+    currentProc = null;
+    await bot.editMessageText(`❌ 壓縮失敗：${err.message}`,
+      { chat_id: msg.chat.id, message_id: statusMsg.message_id });
+  });
+
+  proc.on('close', async (code) => {
+    currentProc = null;
+    const summary = output.trim();
+    if (code === 0 && summary) {
+      pendingCompactContext = summary;
+      newSession = true;
+      currentSessionId = null;
+      const preview = summary.length > 400 ? summary.slice(0, 400) + '…' : summary;
+      try {
+        await bot.editMessageText(
+          `🗜️ *Session 已壓縮*\n下次訊息將以摘要開啟新 session。\n\n📝 摘要預覽：\n\`\`\`\n${preview}\n\`\`\``,
+          { chat_id: msg.chat.id, message_id: statusMsg.message_id, parse_mode: 'MarkdownV2' }
+        );
+      } catch {
+        await bot.editMessageText(
+          `🗜️ Session 已壓縮。下次訊息將以摘要開啟新 session。`,
+          { chat_id: msg.chat.id, message_id: statusMsg.message_id }
+        );
+      }
+    } else {
+      await bot.editMessageText(
+        `❌ 壓縮失敗 (exit ${code})${output ? '\n' + output.slice(0, 200) : ''}`,
+        { chat_id: msg.chat.id, message_id: statusMsg.message_id }
+      );
+    }
+  });
 });
 
 // ── Security-aware prompt runner ──────────────────────────────────────────────
