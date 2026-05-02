@@ -829,7 +829,7 @@ bot.on('callback_query', async (query) => {
       codexMode = false; // 互斥
       codexHistory = [];
       codexInheritedContext = null;
-      const modelMap = { haiku: 'haiku', sonnet: 'claude-sonnet-4-6', opus: 'claude-opus-4-6' };
+      const modelMap = { haiku: 'haiku', sonnet: 'claude-sonnet-4-6', opus: 'claude-opus-4-7' };
       claudeModel = modelMap[choice] ?? choice;
       const label = choice === 'haiku' ? '⚡ Haiku' : choice === 'sonnet' ? '🎵 Sonnet（預設）' : '🏛 Opus';
       bot.editMessageText(
@@ -1353,7 +1353,8 @@ bot.onText(/^\/compact$/, async (msg) => {
 ---對話紀錄---
 ${conversationText}`;
 
-  const args = ['--print', '--no-session-persistence'];
+  const tempSessionId = require('crypto').randomUUID();
+  const args = ['--print', '--no-session-persistence', '--session-id', tempSessionId];
   if (claudeModel) args.push('--model', claudeModel);
 
   const env = { ...process.env };
@@ -1405,6 +1406,8 @@ ${conversationText}`;
         { chat_id: msg.chat.id, message_id: statusMsg.message_id }
       );
     }
+    // Clean up stub JSONL left by claude --print
+    try { fs.unlinkSync(path.join(PROJECTS_ROOT, actualDir, tempSessionId + '.jsonl')); } catch {}
   });
 });
 
