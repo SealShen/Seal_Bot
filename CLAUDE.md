@@ -29,15 +29,8 @@ Commit message 由 Gemma 根據 diff 產生，失敗則 fallback 為 `chore(<fil
 
 ## Haiku 搜尋委派（訂閱用戶版）
 
-使用者是 Pro/Max 訂閱用戶（非 API 付費）。搜尋類任務用
-`Agent(subagent_type="Explore", model="haiku", prompt=...)` 委派，吃訂閱配額不走 API
-（Haiku ≈ Opus 1/15 消耗）。
+使用者是 Pro/Max 訂閱用戶（非 API 付費）。搜尋類任務優先用
+`Agent(subagent_type="Explore", model="haiku", prompt=...)` 委派（Haiku ≈ Opus 1/15 消耗）。
 
 **該委派**：Glob/Grep 類查找、目錄盤點、log/config 固定欄位抽取。
 **不該委派**：跨檔邏輯推理、Write/Edit/Bash、架構判斷、使用者明確點名 Claude 回答。
-
-**觸發（強制）**：`UserPromptSubmit` hook 輸出 `[MODEL_ROUTER] tier=haiku` 時，主
-session 不要直接 Glob/Grep，改委派 Explore agent。
-
-**歷史**：曾短暫建過 `gamma-v1/haiku-search/`（MCP + Anthropic SDK），但對訂閱用戶是
-「花 API 錢省訂閱配額」方向錯誤，已整包刪除；`.mcp.json` 不要再加回 `haiku-search`。
