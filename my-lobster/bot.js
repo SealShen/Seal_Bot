@@ -954,6 +954,8 @@ bot.on('callback_query', async (query) => {
       currentSessionId = null;
       saveBotActiveSession(null);
       newSession = true;
+      currentCodexThreadId = null;
+      currentCodexThreadCwd = null;
       bot.editMessageText('🆕 已切換至新 Session', { chat_id: chatId, message_id: msgId }).catch(() => {});
     } else {
       const sessions = loadAllSessions();
