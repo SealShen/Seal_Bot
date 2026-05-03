@@ -11,13 +11,30 @@ const { verify: totpVerify, generateSecret, generateURI } = require('otplib');
 const QRCode = require('qrcode');
 const telegramifyMarkdown = require('telegramify-markdown');
 
-function tablesToCodeBlocks(text) {
+// Telegram Markdown/MarkdownV2 不支援 markdown 表格；包成 code block 在窄螢幕會慘斷行。
+// 改成定義式 bullet：第一欄當粗體標題，其他欄以「*欄名：* 值」縮排條列。
+function tablesToBulletList(text) {
   return text.replace(/((?:^\|.*$\n?)+)/gm, (block) => {
-    if (/^\|[\s:-]*-{2,}[\s:-]*\|/m.test(block)) {
-      const trimmed = block.replace(/\n$/, '');
-      return '```\n' + trimmed + '\n```\n';
-    }
-    return block;
+    if (!/^\|[\s:-]*-{2,}[\s:-]*\|/m.test(block)) return block;
+    const lines = block.replace(/\n+$/, '').split('\n').filter(l => l.trim());
+    const sepIdx = lines.findIndex(l => /^\|[\s:-]*-{2,}/.test(l));
+    if (sepIdx < 1 || sepIdx >= lines.length - 1) return block;
+    const splitCells = (line) => {
+      const parts = line.split('|');
+      if (parts[0].trim() === '') parts.shift();
+      if (parts.length && parts[parts.length - 1].trim() === '') parts.pop();
+      return parts.map(s => s.trim());
+    };
+    const headers = splitCells(lines[0]);
+    const rows = lines.slice(sepIdx + 1).map(splitCells);
+    if (!headers.length || !rows.length) return block;
+    return rows.map(r => {
+      const title = r[0] || '(無)';
+      const rest = headers.slice(1)
+        .map((h, i) => `  *${h}：* ${r[i + 1] || ''}`)
+        .filter(line => !/^\s*\*[^*]*：\*\s*$/.test(line));
+      return rest.length ? `*${title}*\n${rest.join('\n')}` : `*${title}*`;
+    }).join('\n\n') + '\n';
   });
 }
 
@@ -401,7 +418,7 @@ async function runClaude(prompt, chatId, forceNew = false, imagePaths = []) {
       const headerV2 = code === 0
         ? '✅ *完成*\n\n'
         : `❌ *完成*  _\\(exit ${code}\\)_\n\n`;
-      const rendered = headerV2 + postEscapeV2(telegramifyMarkdown(tablesToCodeBlocks(bodyText), 'escape'));
+      const rendered = headerV2 + postEscapeV2(telegramifyMarkdown(tablesToBulletList(bodyText), 'escape'));
       await bot.editMessageText(rendered, { chat_id: chatId, message_id: msgId, parse_mode: 'MarkdownV2' });
       renderedOk = true;
     } catch (e) { console.warn('[MarkdownV2 fail]', e.message); }
@@ -1025,7 +1042,9 @@ try { runCodex = require('./codex-runner').runCodex; } catch {}
 let gemmaMode = false;
 // gemma 對話歷史（in-memory，重啟清空）
 let gemmaHistory = [];   // [{ role: 'user'|'assistant', content: string }]
-const GEMMA_HISTORY_TURNS = 6; // 保留最近 N 輪（user+assistant 各算一）
+// GEMMA_HISTORY_TURNS × 2 = gemma 一般執行 / summarize / buffer 修剪 三處共用的訊息數
+// （×2 是因為一輪對話含 user + assistant 兩則 message）
+const GEMMA_HISTORY_TURNS = 6;
 
 // 從 Claude session jsonl 讀取歷史，注入到 gemmaHistory（切換到 gemma 時呼叫）
 // 繼承後 gemma 會看到 Claude 的對話脈絡，但 gemma 產生的內容不會回寫到 Claude session
@@ -1661,7 +1680,7 @@ async function runCodexFlow(prompt, chatId, { oneShot = false } = {}) {
       const headerV2 = result.ok
         ? '🦊 *Codex 完成*\n\n'
         : `🦊❌ *Codex* _\\(exit ${result.exitCode}\\)_\n\n`;
-      const rendered = headerV2 + postEscapeV2(telegramifyMarkdown(tablesToCodeBlocks(bodyText), 'escape'));
+      const rendered = headerV2 + postEscapeV2(telegramifyMarkdown(tablesToBulletList(bodyText), 'escape'));
       await bot.editMessageText(rendered, { chat_id: chatId, message_id: msgId, parse_mode: 'MarkdownV2' });
       renderedOk = true;
     } catch (e) { console.warn('[MarkdownV2 fail]', e.message); }
@@ -1838,7 +1857,7 @@ bot.on('message', async (msg) => {
       try {
         const result = await gemmaExecute({
           prompt: text,
-          history: gemmaHistory.slice(-GEMMA_HISTORY_TURNS),
+          history: gemmaHistory.slice(-GEMMA_HISTORY_TURNS * 2),
           workDir: workingDir,
         });
         clearInterval(gemmaTimer);
