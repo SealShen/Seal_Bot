@@ -14,6 +14,8 @@ const telegramifyMarkdown = require('telegramify-markdown');
 // Telegram Markdown/MarkdownV2 不支援 markdown 表格；包成 code block 在窄螢幕會慘斷行。
 // 改成定義式 bullet：第一欄當粗體標題，其他欄以「*欄名：* 值」縮排條列。
 function tablesToBulletList(text) {
+  // escape * _ ` in raw cell values so they don't break the bold delimiters we wrap around them
+  const escMd = (s) => s.replace(/[*_`[\]]/g, '\\$&');
   return text.replace(/((?:^\|.*$\n?)+)/gm, (block) => {
     if (!/^\|[\s:-]*-{2,}[\s:-]*\|/m.test(block)) return block;
     const lines = block.replace(/\n+$/, '').split('\n').filter(l => l.trim());
@@ -29,9 +31,9 @@ function tablesToBulletList(text) {
     const rows = lines.slice(sepIdx + 1).map(splitCells);
     if (!headers.length || !rows.length) return block;
     return rows.map(r => {
-      const title = r[0] || '(無)';
+      const title = escMd(r[0] || '(無)');
       const rest = headers.slice(1)
-        .map((h, i) => `  *${h}：* ${r[i + 1] || ''}`)
+        .map((h, i) => `  *${escMd(h)}：* ${escMd(r[i + 1] || '')}`)
         .filter(line => !/^\s*\*[^*]*：\*\s*$/.test(line));
       return rest.length ? `*${title}*\n${rest.join('\n')}` : `*${title}*`;
     }).join('\n\n') + '\n';
@@ -768,19 +770,6 @@ bot.on('callback_query', async (query) => {
   const msgId   = query.message.message_id;
   bot.answerCallbackQuery(query.id);
 
-  // 🆕 Codex 新 thread
-  if (data === 'codex:newthread') {
-    currentCodexThreadId  = null;
-    currentCodexThreadCwd = null;
-    codexHistory = [];
-    codexInheritedContext = null;
-    bot.editMessageText(
-      '🆕 *Codex thread 已重置*\n下一則 codex 訊息會建立新 thread。',
-      { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' }
-    );
-    return;
-  }
-
   // ✨Model 選擇
   if (data.startsWith('model:')) {
     const choice = data.slice(6); // 'gemma' | 'codex' | 'haiku' | 'sonnet' | 'opus'
@@ -801,7 +790,7 @@ bot.on('callback_query', async (query) => {
         const canResume = currentCodexThreadId && currentCodexThreadCwd === workingDir;
         if (canResume) {
           codexInheritedContext = null;
-          inheritNote = `\n\n📌 將接續 Codex thread \`${currentCodexThreadId.slice(0, 8)}…\`（按「🆕 新 thread」可重置）`;
+          inheritNote = `\n\n📌 將接續 Codex thread \`${currentCodexThreadId.slice(0, 8)}…\``;
         } else {
           const r = inheritClaudeSessionToCodex();
           if (r.ok) inheritNote = `\n\n📥 已繼承 Claude session 歷史（${r.turns} 則訊息，下次 prompt 自動帶入）`;
@@ -1169,30 +1158,31 @@ async function summarizeCodexConversation() {
   }
 
   let timer;
+  let summarizeProc = null;
   try {
     const codexPromise = runCodex({
       prompt: promptForCodex,
       workingDir,
       autoMode,
       resumeThreadId: useResume ? currentCodexThreadId : null,
-      onProc: (p) => { currentProc = p; },
+      onProc: (p) => { summarizeProc = p; },
     });
     const timeoutPromise = new Promise((resolve) => {
       timer = setTimeout(() => {
-        if (currentProc && !currentProc.killed) try { currentProc.kill(); } catch {}
+        if (summarizeProc && !summarizeProc.killed) try { summarizeProc.kill(); } catch {}
         resolve({ ok: false, output: '', error: 'summarize timeout' });
       }, SUMMARIZE_TIMEOUT_MS);
     });
     const result = await Promise.race([codexPromise, timeoutPromise]);
     clearTimeout(timer);
-    currentProc = null;
+    summarizeProc = null;
     if (result?.ok && result.output && result.output.trim()) {
       return result.output.trim();
     }
     return null;
   } catch {
     if (timer) clearTimeout(timer);
-    currentProc = null;
+    summarizeProc = null;
     return null;
   }
 }
@@ -1214,6 +1204,12 @@ async function summarizeGemmaConversation() {
   }
 }
 
+// 把摘要文字裁切成適合 Telegram legacy Markdown 的預覽（去掉 * _ ` 避免斷格）
+function summaryPreview(text, maxLen = 200) {
+  const stripped = text.replace(/[*_`]/g, '');
+  return stripped.length > maxLen ? stripped.slice(0, maxLen) + '…' : stripped;
+}
+
 // 統一的 bridge-back helper：> SUMMARIZE_MIN_TURNS 走 summarize，否則最後一句
 async function bridgeFromCodex(chatId, msgId) {
   const turns = codexHistory.length / 2 | 0;
@@ -1223,7 +1219,7 @@ async function bridgeFromCodex(chatId, msgId) {
     summary = await summarizeCodexConversation();
   }
   if (summary) {
-    return { bridge: summary, note: '\n\n📝 已請 Codex 摘要本段對話，將自動附帶給 Claude' };
+    return { bridge: summary, note: `\n\n📝 Codex 摘要：\n${summaryPreview(summary)}` };
   }
   const lastAssistant = [...codexHistory].reverse().find(m => m.role === 'assistant');
   if (lastAssistant?.content) {
@@ -1240,7 +1236,7 @@ async function bridgeFromGemma(chatId, msgId) {
     summary = await summarizeGemmaConversation();
   }
   if (summary) {
-    return { bridge: summary, note: '\n\n📝 已請 Gemma 摘要本段對話，將自動附帶給 Claude' };
+    return { bridge: summary, note: `\n\n📝 Gemma 摘要：\n${summaryPreview(summary)}` };
   }
   const lastAssistant = [...gemmaHistory].reverse().find(m => m.role === 'assistant');
   if (lastAssistant?.content) {
@@ -1825,10 +1821,7 @@ bot.on('message', async (msg) => {
         reply_markup: {
           inline_keyboard: [
             [{ text: `${current === 'gemma'  ? '✅ ' : ''}🤖 Gemma（本機）`,  callback_data: 'model:gemma'  }],
-            [
-              { text: `${current === 'codex'  ? '✅ ' : ''}🦊 Codex（OpenAI）`, callback_data: 'model:codex' },
-              { text: '🆕 新 thread', callback_data: 'codex:newthread' },
-            ],
+            [{ text: `${current === 'codex'  ? '✅ ' : ''}🦊 Codex（OpenAI）`, callback_data: 'model:codex' }],
             [{ text: `${current === 'haiku'  ? '✅ ' : ''}⚡ Haiku`,          callback_data: 'model:haiku'  }],
             [{ text: `${current === 'sonnet' ? '✅ ' : ''}🎵 Sonnet（預設）`, callback_data: 'model:sonnet' }],
             [{ text: `${current === 'opus'   ? '✅ ' : ''}🏛 Opus`,           callback_data: 'model:opus'   }],

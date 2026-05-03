@@ -32,12 +32,12 @@ function formatItem(item) {
 function runCodex({ prompt, workingDir, autoMode = false, model = null, onProgress = null, onProc = null, resumeThreadId = null }) {
   return new Promise((resolve) => {
     const baseFlags = ['--json', '--skip-git-repo-check'];
-    const sandboxFlag = autoMode
-      ? '--dangerously-bypass-approvals-and-sandbox'
-      : '--full-auto';
+    const sandboxArgs = autoMode
+      ? ['--dangerously-bypass-approvals-and-sandbox']
+      : ['--sandbox', 'workspace-write'];
     const args = resumeThreadId
-      ? ['exec', 'resume', resumeThreadId, ...baseFlags, sandboxFlag]
-      : ['exec', ...baseFlags, sandboxFlag];
+      ? ['exec', 'resume', resumeThreadId, ...baseFlags]
+      : ['exec', ...baseFlags, ...sandboxArgs];
     if (model) args.push('-m', model);
 
     const env = { ...process.env };
