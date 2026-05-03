@@ -29,11 +29,15 @@ function formatItem(item) {
   return '';
 }
 
-function runCodex({ prompt, workingDir, autoMode = false, model = null, onProgress = null, onProc = null }) {
+function runCodex({ prompt, workingDir, autoMode = false, model = null, onProgress = null, onProc = null, resumeThreadId = null }) {
   return new Promise((resolve) => {
-    const sandbox = autoMode ? 'danger-full-access' : 'workspace-write';
-    const args = ['exec', '--json', '--ephemeral', '--skip-git-repo-check', '--color', 'never', '--sandbox', sandbox];
-    if (autoMode) args.push('--dangerously-bypass-approvals-and-sandbox');
+    const baseFlags = ['--json', '--skip-git-repo-check'];
+    const sandboxFlag = autoMode
+      ? '--dangerously-bypass-approvals-and-sandbox'
+      : '--full-auto';
+    const args = resumeThreadId
+      ? ['exec', 'resume', resumeThreadId, ...baseFlags, sandboxFlag]
+      : ['exec', ...baseFlags, sandboxFlag];
     if (model) args.push('-m', model);
 
     const env = { ...process.env };
@@ -127,7 +131,7 @@ function runCodex({ prompt, workingDir, autoMode = false, model = null, onProgre
       resolve({
         ok,
         output: output || (ok ? '(no output)' : ''),
-        threadId,
+        threadId: threadId || resumeThreadId,
         exitCode: code,
         error: ok ? null : (stderrBuf.trim().slice(-1000) || `exit ${code}`),
       });

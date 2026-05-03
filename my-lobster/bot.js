@@ -94,13 +94,17 @@ let autoMode        = false; // --dangerously-skip-permissions toggle
 let claudeModel     = null;  // null = 預設, 'haiku'|'sonnet'|'opus' = --model 指定
 let pendingGemmaContext = null; // 從 gemma 切回 Claude 時，保存 gemma 最後一句回覆，下次送 Claude 時前置一次
 let codexMode       = false; // codex（OpenAI codex-cli）模式 toggle，由 ✨Model 按鈕切換
-// codex 對話歷史（in-memory，重啟清空）：codex CLI 是 ephemeral，需把歷史嵌入 prompt
+// codex 對話歷史（in-memory，重啟清空）：在沒有 active thread 時用作 fallback 把歷史嵌入 prompt
 let codexHistory = [];   // [{ role: 'user'|'assistant', content: string }]
 const CODEX_HISTORY_TURNS = 4; // codex 每呼叫成本高，少留一點
 // 切到 codex 時從 Claude session 繼承的 context（codex 模式期間持續使用，第一次 prompt 後清掉）
 let codexInheritedContext = null;
-// 切回 Claude 時，把 codex 最後輸出帶過去（一次性，下次 Claude 訊息前置）
+// 切回 Claude 時，把 codex 端的脈絡帶過去（一次性，下次 Claude 訊息前置）
 let pendingCodexContext = null;
+// codex thread 持續性：thread.started.thread_id 與 ~/.codex/sessions rollout UUID 同源
+// in-memory 保存，重啟即清；cwd 不同時自動新 thread
+let currentCodexThreadId  = null;
+let currentCodexThreadCwd = null;
 let pendingCompactContext = null;
 
 const SESSIONS_FILE = path.join(__dirname, 'sessions.json');
@@ -732,6 +736,19 @@ bot.on('callback_query', async (query) => {
   const msgId   = query.message.message_id;
   bot.answerCallbackQuery(query.id);
 
+  // 🆕 Codex 新 thread
+  if (data === 'codex:newthread') {
+    currentCodexThreadId  = null;
+    currentCodexThreadCwd = null;
+    codexHistory = [];
+    codexInheritedContext = null;
+    bot.editMessageText(
+      '🆕 *Codex thread 已重置*\n下一則 codex 訊息會建立新 thread。',
+      { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown' }
+    );
+    return;
+  }
+
   // ✨Model 選擇
   if (data.startsWith('model:')) {
     const choice = data.slice(6); // 'gemma' | 'codex' | 'haiku' | 'sonnet' | 'opus'
@@ -748,12 +765,18 @@ bot.on('callback_query', async (query) => {
         gemmaHistory = [];
         claudeModel = null;
         codexHistory = [];
-        // 繼承當前 Claude session 歷史，下次 codex prompt 會前置注入
-        const r = inheritClaudeSessionToCodex();
-        if (r.ok) inheritNote = `\n\n📥 已繼承 Claude session 歷史（${r.turns} 則訊息，下次 prompt 自動帶入）`;
-        else { codexInheritedContext = null; inheritNote = `\n\n_（無可繼承的歷史：${r.reason}）_`; }
+        // 若已有可接續的 thread（同 cwd），跳過繼承注入；codex 自帶記憶，不需重複塞
+        const canResume = currentCodexThreadId && currentCodexThreadCwd === workingDir;
+        if (canResume) {
+          codexInheritedContext = null;
+          inheritNote = `\n\n📌 將接續 Codex thread \`${currentCodexThreadId.slice(0, 8)}…\`（按「🆕 新 thread」可重置）`;
+        } else {
+          const r = inheritClaudeSessionToCodex();
+          if (r.ok) inheritNote = `\n\n📥 已繼承 Claude session 歷史（${r.turns} 則訊息，下次 prompt 自動帶入）`;
+          else { codexInheritedContext = null; inheritNote = `\n\n_（無可繼承的歷史：${r.reason}）_`; }
+        }
       } else {
-        // 關閉時：抓 codex 最後一句回覆，排入下一則 Claude prompt 的前置
+        // 關閉時：bridge（Stage 2 會套 bridgeFromCodex，Stage 1 保留舊行為）
         const lastAssistant = [...codexHistory].reverse().find(m => m.role === 'assistant');
         if (lastAssistant?.content) {
           pendingCodexContext = lastAssistant.content;
@@ -1218,7 +1241,7 @@ bot.onText(/\/codex(.*)/, async (msg, match) => {
     );
     return;
   }
-  await runCodexFlow(prompt, msg.chat.id);
+  await runCodexFlow(prompt, msg.chat.id, { oneShot: true });
 });
 
 bot.onText(/\/new (.+)/, async (msg, match) => {
@@ -1440,13 +1463,16 @@ async function safeRunClaude(prompt, chatId, forceNew = false, imagePaths = []) 
   await runClaude(prompt, chatId, forceNew, imagePaths);
 }
 
-// 組合送進 codex 的 prompt：在 codex 模式下前置繼承的 Claude context 與近期 codex 歷史
-function buildCodexPrompt(userPrompt) {
-  if (!codexMode) return userPrompt; // /codex 一次性指令不注入
+// 組合送進 codex 的 prompt
+// useResume=true：codex 已用 --resume 掛上整條 thread 的記憶，userPrompt 直接送即可
+// useResume=false：第一次發 prompt（或 oneShot），把繼承自 Claude 的脈絡 + 本次 in-memory 歷史前置
+function buildCodexPrompt(userPrompt, { useResume = false, isOneShot = false } = {}) {
+  if (isOneShot) return userPrompt; // /codex 單次指令不注入任何脈絡
+  if (useResume) return userPrompt;  // resume 模式：codex 自帶記憶，避免重複占字數
   const parts = [];
   if (codexInheritedContext) {
     parts.push('[以下是使用者剛才在 Claude Code 那邊的對話脈絡，僅供參考]\n' + codexInheritedContext);
-    codexInheritedContext = null; // 一次性，用完即焚（避免重複占字數）
+    codexInheritedContext = null;
   }
   if (codexHistory.length) {
     const recent = codexHistory.slice(-CODEX_HISTORY_TURNS * 2);
@@ -1461,13 +1487,17 @@ function buildCodexPrompt(userPrompt) {
 }
 
 // ── Codex flow（給 /codex 與 codex 模式訊息分支共用）─────────────────────────
-async function runCodexFlow(prompt, chatId) {
+async function runCodexFlow(prompt, chatId, { oneShot = false } = {}) {
   if (!runCodex) {
     await bot.sendMessage(chatId, '❌ codex-runner 未載入。');
     return;
   }
   const statusMsg = await bot.sendMessage(chatId, '🦊 Codex 思考中…');
   const msgId = statusMsg.message_id;
+
+  // 決定本回合是否要 resume：oneShot 永遠新 thread；codex 模式才考慮 resume
+  const cwdMatches = currentCodexThreadCwd && currentCodexThreadCwd === workingDir;
+  const useResume = !oneShot && codexMode && !!currentCodexThreadId && cwdMatches;
 
   let lastSnapshot = '';
   let lastSent     = '';
@@ -1479,28 +1509,38 @@ async function runCodexFlow(prompt, chatId) {
       await safeEdit(chatId, msgId, `🦊 ${elapsed}s\n\`\`\`\n${tail(lastSnapshot)}\n\`\`\``);
       lastSent = lastSnapshot;
     } else if (!lastSnapshot) {
-      await safeEdit(chatId, msgId, `🦊 Codex 思考中… ${elapsed}s`);
+      const tag = useResume ? `🦊 Codex resume 思考中… ${elapsed}s` : `🦊 Codex 思考中… ${elapsed}s`;
+      await safeEdit(chatId, msgId, tag);
     }
   }, STREAM_INTERVAL);
 
   try {
-    const composedPrompt = buildCodexPrompt(prompt);
+    const composedPrompt = buildCodexPrompt(prompt, { useResume, isOneShot: oneShot });
     const result = await runCodex({
       prompt: composedPrompt,
       workingDir,
       autoMode,
+      resumeThreadId: useResume ? currentCodexThreadId : null,
       onProgress: (snap) => { lastSnapshot = snap; },
       onProc: (p) => { currentProc = p; },
     });
     clearInterval(timer);
     currentProc = null;
 
-    // 成功才寫入歷史；歷史只存原始 user prompt 與 codex 回覆（不含已注入的 context，避免遞迴膨脹）
-    if (codexMode && result.ok && result.output) {
-      codexHistory.push({ role: 'user', content: prompt });
-      codexHistory.push({ role: 'assistant', content: result.output });
-      if (codexHistory.length > CODEX_HISTORY_TURNS * 2) {
-        codexHistory = codexHistory.slice(-CODEX_HISTORY_TURNS * 2);
+    // 成功 + codex 模式（非 oneShot）：更新 in-memory thread id 與對話歷史
+    if (!oneShot && codexMode && result.ok) {
+      if (result.threadId && result.threadId !== currentCodexThreadId) {
+        currentCodexThreadId  = result.threadId;
+        currentCodexThreadCwd = workingDir;
+      } else if (result.threadId && !currentCodexThreadCwd) {
+        currentCodexThreadCwd = workingDir;
+      }
+      if (result.output) {
+        codexHistory.push({ role: 'user', content: prompt });
+        codexHistory.push({ role: 'assistant', content: result.output });
+        if (codexHistory.length > CODEX_HISTORY_TURNS * 2) {
+          codexHistory = codexHistory.slice(-CODEX_HISTORY_TURNS * 2);
+        }
       }
     }
 
@@ -1614,7 +1654,10 @@ bot.on('message', async (msg) => {
         ? `指定 \`${currentSessionId.slice(0, 8)}…\``
         : (newSession ? '新' : '繼續上次');
       const gemmaSuffix = gemmaMode ? `\n*模式：* 🤖 Gemma（${gemmaHistory.length / 2 | 0} 輪歷史）` : '';
-      const codexSuffix = codexMode ? '\n*模式：* 🦊 Codex（OpenAI）' : '';
+      const codexThreadInfo = currentCodexThreadId
+        ? `（thread \`${currentCodexThreadId.slice(0, 8)}…\`${currentCodexThreadCwd === workingDir ? '' : '，cwd 不同會新 thread'}）`
+        : '（尚無 thread，下回新開）';
+      const codexSuffix = codexMode ? `\n*模式：* 🦊 Codex（OpenAI）${codexThreadInfo}` : '';
       const autoSuffix = autoMode ? '\n*Auto Mode：* ⚠️ 開啟（跳過工具確認）' : '';
       bot.sendMessage(msg.chat.id,
         `*狀態：* ${status}\n*目錄：* \`${workingDir}\`\n*Session：* ${sessLabel}${gemmaSuffix}${codexSuffix}${autoSuffix}`,
@@ -1647,12 +1690,18 @@ bot.on('message', async (msg) => {
       const current = codexMode ? 'codex'
                     : gemmaMode  ? 'gemma'
                     : (claudeModel || 'sonnet');
-      bot.sendMessage(msg.chat.id, `✨ *Model 選擇*\n目前：\`${current}\`\n\n選擇要切換的模型：`, {
+      const codexThreadHint = currentCodexThreadId
+        ? `\n*Codex thread：* \`${currentCodexThreadId.slice(0, 8)}…\`${currentCodexThreadCwd === workingDir ? '（同目錄，可接續）' : '（cwd 不同，下回會新 thread）'}`
+        : '\n*Codex thread：* 尚無';
+      bot.sendMessage(msg.chat.id, `✨ *Model 選擇*\n目前：\`${current}\`${codexThreadHint}\n\n選擇要切換的模型：`, {
         parse_mode: 'Markdown',
         reply_markup: {
           inline_keyboard: [
             [{ text: `${current === 'gemma'  ? '✅ ' : ''}🤖 Gemma（本機）`,  callback_data: 'model:gemma'  }],
-            [{ text: `${current === 'codex'  ? '✅ ' : ''}🦊 Codex（OpenAI）`, callback_data: 'model:codex' }],
+            [
+              { text: `${current === 'codex'  ? '✅ ' : ''}🦊 Codex（OpenAI）`, callback_data: 'model:codex' },
+              { text: '🆕 新 thread', callback_data: 'codex:newthread' },
+            ],
             [{ text: `${current === 'haiku'  ? '✅ ' : ''}⚡ Haiku`,          callback_data: 'model:haiku'  }],
             [{ text: `${current === 'sonnet' ? '✅ ' : ''}🎵 Sonnet（預設）`, callback_data: 'model:sonnet' }],
             [{ text: `${current === 'opus'   ? '✅ ' : ''}🏛 Opus`,           callback_data: 'model:opus'   }],
