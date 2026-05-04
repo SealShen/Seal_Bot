@@ -12,10 +12,9 @@ const QRCode = require('qrcode');
 const telegramifyMarkdown = require('telegramify-markdown');
 
 // Telegram Markdown/MarkdownV2 不支援 markdown 表格；包成 code block 在窄螢幕會慘斷行。
-// 改成定義式 bullet：第一欄當粗體標題，其他欄以「*欄名：* 值」縮排條列。
+// 改成 plain text 兩層 bullet：第一欄 `▸ 標題`，其他欄縮排 `欄名: 值`。
+// 用 plain text（不含 *_ 等 markdown 標記）讓 MD V2 / MD V1 / 無 parse_mode fallback 都能直接顯示。
 function tablesToBulletList(text) {
-  // escape * _ ` in raw cell values so they don't break the bold delimiters we wrap around them
-  const escMd = (s) => s.replace(/[*_`[\]]/g, '\\$&');
   return text.replace(/((?:^\|.*$\n?)+)/gm, (block) => {
     if (!/^\|[\s:-]*-{2,}[\s:-]*\|/m.test(block)) return block;
     const lines = block.replace(/\n+$/, '').split('\n').filter(l => l.trim());
@@ -31,11 +30,11 @@ function tablesToBulletList(text) {
     const rows = lines.slice(sepIdx + 1).map(splitCells);
     if (!headers.length || !rows.length) return block;
     return rows.map(r => {
-      const title = escMd(r[0] || '(無)');
+      const title = r[0] || '(無)';
       const rest = headers.slice(1)
-        .map((h, i) => `  *${escMd(h)}：* ${escMd(r[i + 1] || '')}`)
-        .filter(line => !/^\s*\*[^*]*：\*\s*$/.test(line));
-      return rest.length ? `*${title}*\n${rest.join('\n')}` : `*${title}*`;
+        .map((h, i) => `  ${h}: ${r[i + 1] || ''}`)
+        .filter(line => !/^\s*[^:]+:\s*$/.test(line));
+      return rest.length ? `▸ ${title}\n${rest.join('\n')}` : `▸ ${title}`;
     }).join('\n\n') + '\n';
   });
 }
@@ -413,14 +412,15 @@ async function runClaude(prompt, chatId, forceNew = false, imagePaths = []) {
 
     const icon = code === 0 ? '✅' : '❌';
     const footerV1 = code !== 0 ? `  _(exit ${code})_` : '';
-    const bodyText = tail(output) || '(no output)';
+    // flatten markdown tables once up front so both rendered + fallback paths share clean text
+    const bodyText = tablesToBulletList(tail(output) || '(no output)');
 
     let renderedOk = false;
     try {
       const headerV2 = code === 0
         ? '✅ *完成*\n\n'
         : `❌ *完成*  _\\(exit ${code}\\)_\n\n`;
-      const rendered = headerV2 + postEscapeV2(telegramifyMarkdown(tablesToBulletList(bodyText), 'escape'));
+      const rendered = headerV2 + postEscapeV2(telegramifyMarkdown(bodyText, 'escape'));
       await bot.editMessageText(rendered, { chat_id: chatId, message_id: msgId, parse_mode: 'MarkdownV2' });
       renderedOk = true;
     } catch (e) { console.warn('[MarkdownV2 fail]', e.message); }
@@ -786,16 +786,12 @@ bot.on('callback_query', async (query) => {
         gemmaHistory = [];
         claudeModel = null;
         codexHistory = [];
-        // 若已有可接續的 thread（同 cwd），跳過繼承注入；codex 自帶記憶，不需重複塞
-        const canResume = currentCodexThreadId && currentCodexThreadCwd === workingDir;
-        if (canResume) {
-          codexInheritedContext = null;
-          inheritNote = `\n\n📌 將接續 Codex thread \`${currentCodexThreadId.slice(0, 8)}…\``;
-        } else {
-          const r = inheritClaudeSessionToCodex();
-          if (r.ok) inheritNote = `\n\n📥 已繼承 Claude session 歷史（${r.turns} 則訊息，下次 prompt 自動帶入）`;
-          else { codexInheritedContext = null; inheritNote = `\n\n_（無可繼承的歷史：${r.reason}）_`; }
-        }
+        // 切入 Codex 時永遠起新 thread，確保 Claude 脈絡能注入第一則 prompt
+        currentCodexThreadId = null;
+        currentCodexThreadCwd = null;
+        const r = inheritClaudeSessionToCodex();
+        if (r.ok) inheritNote = `\n\n📥 已繼承 Claude session 歷史（共 ${r.turns} 則，帶入 ${r.included} 則，下次 prompt 自動注入）`;
+        else { codexInheritedContext = null; inheritNote = `\n\n_（無可繼承的歷史：${r.reason}）_`; }
       } else {
         // 關閉時：> SUMMARIZE_MIN_TURNS 自動 summarize，否則 bridge 最後一句
         const { bridge, note } = await bridgeFromCodex(chatId, msgId);
@@ -1086,8 +1082,8 @@ function inheritClaudeSessionToGemma() {
   return { ok: true, turns: history.length };
 }
 
-// 從 Claude session jsonl 抽出近 N 輪對話，組成一段純文字 context（切到 codex 時呼叫）
-// 因為 codex CLI 是 ephemeral 不收 history 參數，把歷史塞進 prompt 前置區塊
+// 從 Claude session jsonl 抽出完整對話，組成純文字 context（切到 codex 時呼叫）
+// 近期輪次保留完整；舊輪次壓縮；超過整體字元上限時從最舊端截掉
 function inheritClaudeSessionToCodex() {
   if (!currentSessionId) return { ok: false, reason: '目前沒有進行中的 Claude session' };
   const slug = pathToSlug(workingDir).toLowerCase();
@@ -1126,20 +1122,44 @@ function inheritClaudeSessionToCodex() {
     }
   } catch (e) { return { ok: false, reason: '讀取失敗：' + e.message }; }
 
-  // 只取最近 N 輪（user+assistant 配對）；codex prompt 別塞太肥
-  const trimmed = history.slice(-CODEX_HISTORY_TURNS * 2);
-  if (!trimmed.length) return { ok: false, reason: '歷史為空' };
+  if (!history.length) return { ok: false, reason: '歷史為空' };
 
-  // 組成純文字 context block：codex 沒有 role 概念，直接以 User:/Assistant: 標示
-  const block = trimmed.map(m => {
+  // 分層壓縮：近期 CODEX_HISTORY_TURNS*2 條保留完整，更早的截短
+  const RECENT_COUNT = CODEX_HISTORY_TURNS * 2;
+  const FULL_CAP  = 4000;  // 近期每條字元上限
+  const OLD_CAP   = 500;   // 舊輪次每條字元上限
+  const TOTAL_CAP = 80000; // 整體上限（約 20k tokens）
+
+  const formatted = history.map((m, i) => {
     const tag = m.role === 'user' ? 'User' : 'Claude';
-    // 每段最多 2000 字元，避免單則訊息把 prompt 撐爆
-    const body = m.content.length > 2000 ? m.content.slice(0, 2000) + '…(略)' : m.content;
+    const isRecent = i >= history.length - RECENT_COUNT;
+    const cap = isRecent ? FULL_CAP : OLD_CAP;
+    const body = m.content.length > cap ? m.content.slice(0, cap) + '…(略)' : m.content;
     return `${tag}: ${body}`;
-  }).join('\n\n');
+  });
 
-  codexInheritedContext = block;
-  return { ok: true, turns: trimmed.length };
+  // 從最新往舊累積到 TOTAL_CAP，確保近期內容必然包含
+  let total = 0;
+  let startIdx = formatted.length;
+  for (let i = formatted.length - 1; i >= 0; i--) {
+    total += formatted[i].length + 2;
+    if (total > TOTAL_CAP) break;
+    startIdx = i;
+  }
+  // 保底：若連最新一則都超過 TOTAL_CAP（會導致 included=[]），仍塞最後一則並截短
+  if (startIdx === formatted.length && formatted.length > 0) {
+    const lastIdx = formatted.length - 1;
+    const last = formatted[lastIdx];
+    formatted[lastIdx] = last.length > TOTAL_CAP ? last.slice(0, TOTAL_CAP) + '…(略)' : last;
+    startIdx = lastIdx;
+  }
+  const included = formatted.slice(startIdx);
+  const skipped = startIdx;
+
+  const skippedNote = skipped > 0 ? `早期 ${skipped} 則因長度略去，` : '';
+  const header = `[以下是 Claude session 的完整對話紀錄（共 ${history.length} 則，${skippedNote}含最近 ${included.length} 則）。Claude 已當機或不可用，請接手繼續協助使用者完成任務。]\n\n`;
+  codexInheritedContext = header + included.join('\n\n');
+  return { ok: true, turns: history.length, included: included.length };
 }
 
 // ── Auto-summarize 切回 Claude 時的 helper ────────────────────────────────────
@@ -1671,14 +1691,15 @@ async function runCodexFlow(prompt, chatId, { oneShot = false } = {}) {
 
     const icon = result.ok ? '✅' : '❌';
     const footerV1 = result.ok ? '' : `  _(exit ${result.exitCode})_`;
-    const bodyText = tail(result.output) || (result.error ? result.error : '(no output)');
+    // flatten markdown tables once up front so both rendered + fallback paths share clean text
+    const bodyText = tablesToBulletList(tail(result.output) || (result.error ? result.error : '(no output)'));
 
     let renderedOk = false;
     try {
       const headerV2 = result.ok
         ? '🦊 *Codex 完成*\n\n'
         : `🦊❌ *Codex* _\\(exit ${result.exitCode}\\)_\n\n`;
-      const rendered = headerV2 + postEscapeV2(telegramifyMarkdown(tablesToBulletList(bodyText), 'escape'));
+      const rendered = headerV2 + postEscapeV2(telegramifyMarkdown(bodyText, 'escape'));
       await bot.editMessageText(rendered, { chat_id: chatId, message_id: msgId, parse_mode: 'MarkdownV2' });
       renderedOk = true;
     } catch (e) { console.warn('[MarkdownV2 fail]', e.message); }
@@ -1866,7 +1887,8 @@ bot.on('message', async (msg) => {
             gemmaHistory = gemmaHistory.slice(-GEMMA_HISTORY_TURNS * 2);
           }
           const upg = result.suggestUpgrade ? `\n💡 /gemma --profile ${result.suggestUpgrade}` : '';
-          const reply = result.content.slice(-3800) + upg;
+          // flatten markdown tables before truncation; Gemma path has no parse_mode so plain bullets are required
+          const reply = tablesToBulletList(result.content).slice(-3800) + upg;
           await bot.editMessageText(reply, { chat_id: msg.chat.id, message_id: msgId })
             .catch(() => bot.sendMessage(msg.chat.id, reply));
         } else {
